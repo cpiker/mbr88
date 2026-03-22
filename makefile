@@ -5,24 +5,23 @@
 # cd mbr88
 # make
 
-.PHONY: gas nasm
-
-# Should probably use "make gas" when building in elks environment
-gas:build build/mbr88_gas.bin build/mbr_patch
-
-# Here's a build for native systems with nasm & gcc
-nasm:build build/mbr88_nasm.bin build/mbr_patch_native
-
-build: 
-	@if [ ! -e "$(BD)" ]; then mkdir build; fi
+.PHONY: gas nasm tools all
 
 # Make both
-all:build \
- build/mbr88_nasm.bin \
- build/mbr88_gas.bin \
+tools:build \
  build/mbr_patch \
  build/mbr_patch_native
 
+# Should probably use "make gas" when building in elks environment
+gas:build build/mbr88_gas.bin
+
+# Here's a build for native systems with nasm & gcc
+nasm:build build/mbr88_nasm.bin
+
+all: tools gas nasm
+
+build: 
+	@if [ ! -e "$(BD)" ]; then mkdir build; fi
 
 build/mbr88_nasm.bin:src/mbr88_nasm.asm
 	nasm -f bin $< -o $@
