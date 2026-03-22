@@ -75,6 +75,15 @@
  *   .org N is relative to section base (set by -Ttext=0x7C00 at link time)
  *   DO NOT use ". = 0x7C00 + N" — that measures from absolute zero
  *   and produces ~31 KB of unwanted padding in the output binary.
+ *
+ * Jump size optimization warning:
+ *   GAS will optimize 'jmp label' to a 2-byte short jump (EB) whenever
+ *   the displacement fits in a signed byte (±127).  NASM's 'jmp near'
+ *   always emits a 3-byte near jump (E9).  To force a near jump in GAS
+ *   and maintain binary identity with the NASM version, emit raw bytes:
+ *     .byte 0xE9
+ *     .word label - (. - 1)   # displacement from end of instruction
+ *   This is exactly what the _start jump at the top of this file does.
  * ===========================================================================*/
 
     .arch   i8086,jumps
@@ -88,7 +97,14 @@
 
     .global _start
 _start:
-    jmp     start                   # near jump over data area (>127 bytes away)
+    # Force a 3-byte near jump (opcode E9) over the data area.
+    # GAS would optimize 'jmp start' to a 2-byte short jump (EB) because
+    # the target is exactly 127 bytes away — the last value that fits in a
+    # signed byte.  That shifts every subsequent byte vs the NASM binary.
+    # We emit the opcode and displacement explicitly, matching NASM's
+    # 'jmp near start' which always produces E9 xx xx.
+    .byte   0xE9
+    .word   start - (_start + 3)    # displacement from end of this instruction
 
 str_boot_from:
     .ascii  "Boot:\r\n"
