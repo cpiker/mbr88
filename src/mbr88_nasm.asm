@@ -72,7 +72,8 @@
 ;
 ; Memory map:
 ;   0x0000:0x7C00  — BIOS loads us here initially
-;   0x0000:0x7A00  — we relocate here, freeing 0x7C00 for the VBR
+;   0x0000:0x6000  — we relocate here (traditional MBR relocation address),
+;                    freeing 0x7C00 for the VBR.  Gives ~22 KB of stack space.
 ;
 ; Boot menu format:
 ;   Boot:
@@ -83,7 +84,7 @@
 ;
 ; Labels are stored in part_labels (four 16-byte slots).
 ; Each slot: 11 chars + CR + LF + null + 2 pad bytes.
-; mbr_patch.py / mbr_patch.c write them alongside the partition table entries.
+; mbr_patch writes them alongside the partition table entries.
 ;
 ; Valid keystrokes:
 ;   A / a  — boot floppy drive A  (BIOS drive 00h)
@@ -103,15 +104,34 @@
 ;
 ; Relocation delta:
 ;   ORG is 0x7C00 so every label assembles to a 0x7Cxx address.
-;   After relocation the bytes live at 0x7A00+offset.
-;   RDELTA (= -0x0200) is added to every label referenced after the
-;   far-jump so the reference lands in the relocated copy.
+;   After relocation the bytes live at 0x6000+offset.
+;   RDELTA (= 0x6000 - 0x7C00 = -0x1C00) is added to every label
+;   referenced after the far-jump so the reference lands in the
+;   relocated copy.
+;
+; Far jumps:
+;   Two far jumps appear in this code, both encoded as raw bytes rather
+;   than using the NASM 'jmp seg:off' mnemonic.  This is necessary
+;   because NASM's far jump syntax does not accept arithmetic expressions
+;   in the offset field — only simple labels or literal values.  The raw
+;   encoding (0xEA followed by offset word and segment word) is the
+;   standard workaround used in MBR and bootloader code.
+;
+; Binary layout (512 bytes):
+;   0x000-0x042  Code + data (jmp, strings, scratch_char)
+;   0x043-0x082  part_labels (four 16-byte label slots, zeroed at build time)
+;   0x083-0x1B6  Boot code (instructions)
+;   0x1B7        Zero padding (1 byte — binary is fully packed)
+;   0x1B8-0x1BC  'mbr88' signature (5 bytes)
+;   0x1BD        Version byte: high nibble = major, low nibble = minor (0x01 = v0.1)
+;   0x1BE-0x1FD  Partition table (4 x 16-byte entries)
+;   0x1FE-0x1FF  Boot signature 55h AAh
 ; =============================================================================
 
         bits    16
         org     7C00h
 
-RDELTA  equ     7A00h - 7C00h           ; = -0x0200
+RDELTA  equ     6000h - 7C00h           ; = -0x1C00
 
 ; =============================================================================
 ; String and data table
@@ -144,7 +164,6 @@ scratch_char:
 ;   Bytes 11-12  CR + LF (0x0D 0x0A) — required for line break
 ;   Byte   13    Null terminator (stops print_str)
 ;   Bytes 14-15  Zero padding
-; mbr_patch.py writes all four slots when the user edits partition entries.
 part_labels:
         times   64  db 0                ; 4 slots x 16 bytes
 
@@ -157,24 +176,30 @@ start:
         mov     ds, ax
         mov     es, ax
         mov     ss, ax
-        mov     sp, 7A00h
+        mov     sp, 6000h
         sti
 
 ; =============================================================================
-; RELOCATION — copy 512 bytes from 0x7C00 to 0x7A00
+; RELOCATION — copy 512 bytes from 0x7C00 to 0x6000, then far jump there.
+;
+; The far jump is encoded as raw bytes (0xEA + offset word + segment word)
+; because NASM's far jump syntax does not accept arithmetic expressions in
+; the offset field.  The target is after_reloc in the relocated copy:
+;   offset = 0x6000 + (after_reloc - 0x7C00)
+;   segment = 0x0000
 ; =============================================================================
 relocate:
         mov     si, 7C00h
-        mov     di, 7A00h
+        mov     di, 6000h
         mov     cx, 256
         rep     movsw
 
-        db      0EAh
-        dw      7A00h + (after_reloc - 7C00h)
-        dw      0000h
+        db      0EAh                            ; far jump opcode
+        dw      6000h + (after_reloc - 7C00h)  ; offset in relocated copy
+        dw      0000h                           ; segment
 
 ; =============================================================================
-; Execution continues here inside the RELOCATED copy at 0x7A00.
+; Execution continues here inside the RELOCATED copy at 0x6000.
 ; =============================================================================
 after_reloc:
 
@@ -271,21 +296,39 @@ do_floppy:
 ; output lands on a fresh line.  This is done by pointing print_str at
 ; the \r\n\0 that is already embedded inside str_disk_err at offset +10,
 ; saving us the 8 bytes an inline MOV/INT sequence would cost.
+;
+; The far jump to the VBR is encoded as raw bytes (0xEA + 0x7C00 + 0x0000)
+; because NASM's far jump syntax does not accept arithmetic expressions in
+; the offset field — though in this case the target is a literal 0x7C00
+; and raw encoding is used here for consistency with the relocation jump.
+;
+; Retry loop: floppy drives require up to 3 attempts to allow the disk
+; motor time to reach stable speed.  The reset is retried each pass.
+; If the reset itself fails we proceed to the read anyway — a failed reset
+; will produce a failed read, handled by the retry loop.  After 3 consecutive
+; read failures we report disk_error.  This follows the convention of most
+; XT-class MBR boot blocks.
 ; =============================================================================
 do_chs_read:
-        mov     bl, dl                  ; save drive number
+        mov     bl, dl                  ; save drive number across reset
 
+        mov     cx, 3                   ; retry counter (3 attempts)
+.retry:
         mov     ah, 00h                 ; INT 13h/00h = reset
         int     13h
-        jc      disk_error
+        ; jc not checked after reset — a reset failure produces a read
+        ; failure on the next instruction, caught by the retry loop.
 
-        mov     dl, bl                  ; restore drive number
+        mov     dl, bl                  ; restore drive number (BIOS may corrupt)
 
         mov     ah, 02h                 ; INT 13h/02h = read sectors
         mov     al, 01h
         mov     bx, 7C00h
         int     13h
-        jc      disk_error
+        jnc     .read_ok                ; success — proceed to VBR check
+        loop    .retry                  ; read failed — decrement CX, retry
+        jmp     disk_error              ; all 3 attempts failed
+.read_ok:
 
         ; VBR signature check
         cmp     byte [7DFEh], 55h
@@ -299,7 +342,8 @@ do_chs_read:
         mov     si, str_disk_err + 10 + RDELTA
         call    print_str               ; prints "\r\n" then stops at null
 
-        ; Far-jump to VBR — DL = boot drive (IBM BIOS convention)
+        ; Far-jump to VBR at 0x0000:0x7C00 — DL = boot drive (IBM BIOS convention).
+        ; Encoded as raw bytes for consistency with the relocation jump above.
         db      0EAh
         dw      7C00h
         dw      0000h
@@ -360,7 +404,7 @@ display_list:
         push    cx                      ; save LOOP counter — MOV CL,4 clobbers CX
         mov     al, bl
         sub     al, '1'                 ; 0-based index
-        xor     ah, ah                  ; AX = index
+        cbw                             ; AX = index (AL is 0-3, cbw = xor ah,ah here)
         mov     cl, 4
         shl     ax, cl                  ; AX = index * 16
         add     ax, part_labels + RDELTA
@@ -370,7 +414,7 @@ display_list:
         ; Recalculate SI to current partition entry (CL still 4, CX still pushed)
         mov     al, bl
         sub     al, '1'
-        xor     ah, ah
+        cbw                             ; AX = index (cbw saves 1 byte vs xor ah,ah)
         shl     ax, cl                  ; AX = index * 16  (CL still = 4)
         add     ax, 7BBEh
         mov     si, ax
@@ -403,24 +447,25 @@ print_str:
 ; =============================================================================
 ; Signature and partition table.
 ;
-; "mbr88" (5 bytes, no null) is placed at MBR offset 0x1B9, immediately
-; after the last byte of code.  It fills the reserved area 0x1B9-0x1BD,
-; leaving 0x1BD as zero and the partition table beginning at 0x1BE as
-; required.  Magic numbers are identified by position and length, not by
-; null termination — 0x55AA itself has no null.
+; 'mbr88' (5 bytes) is placed at MBR offset 0x1B8 followed immediately by
+; the version byte 0x01 at 0x1BD.  Version encoding: high nibble = major,
+; low nibble = minor (0x01 = v0.1).
 ;
-; Offset 0x1B8 (the first reserved byte) is zero-padded by the code area.
-; Offsets 0x1B8-0x1BD are the conventional disk signature reserved area.
-; Windows uses 0x1B8-0x1BB as a 4-byte disk serial number; we target
-; XT-class hardware only so these bytes are available for our use.
+; The reserved area 0x1B8-0x1BD is used in full:
+;   0x1B8-0x1BC  'mbr88' signature
+;   0x1BD        version byte (0x01 = v0.1)
+;
+; Magic numbers are identified by position and length, not null termination.
 ; =============================================================================
-        times   1B9h - ($ - $$)  db 0  ; pad any remaining gap (currently 0 bytes)
+        times   1B8h - ($ - $$)  db 0  ; pad to signature (1 zero byte — fully packed)
 
 mbr_sig:
-        db      'mbr88'                 ; 5-byte magic at 0x1B9-0x1BD: 6D 62 72 38 38
+        db      'mbr88'                 ; 5-byte signature: 6D 62 72 38 38
+mbr_ver:
+        db      01h                     ; version 0.1 (major=0, minor=1)
 
 part_table:
-        times   64  db 0                ; written by mbr_patch.py
+        times   64  db 0                ; written by mbr_patch
 
         times   510 - ($ - $$)  db 0
         db      55h

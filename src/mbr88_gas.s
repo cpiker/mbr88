@@ -80,16 +80,25 @@
  *   GAS will optimize 'jmp label' to a 2-byte short jump (EB) whenever
  *   the displacement fits in a signed byte (±127).  NASM's 'jmp near'
  *   always emits a 3-byte near jump (E9).  To force a near jump in GAS
- *   and maintain binary identity with the NASM version, emit raw bytes:
+ *   and maintain binary identity with the NASM version, the initial jump
+ *   is emitted as raw bytes:
  *     .byte 0xE9
- *     .word label - (. - 1)   # displacement from end of instruction
+ *     .word start - (_start + 3)
  *   This is exactly what the _start jump at the top of this file does.
+ *
+ * Far jumps:
+ *   Two far jumps appear in this code, both encoded as raw bytes rather
+ *   than using the GAS 'ljmp' mnemonic.  This is necessary because GAS
+ *   far jump syntax does not accept arithmetic expressions in the offset
+ *   field — only simple labels or literal values.  The raw encoding
+ *   (0xEA followed by offset word and segment word) is the standard
+ *   workaround used in MBR and bootloader code.
  * ===========================================================================*/
 
     .arch   i8086,jumps
     .code16
 
-    .equ    RDELTA, 0x7A00 - 0x7C00    # = -0x0200
+    .equ    RDELTA, 0x6000 - 0x7C00    # = -0x1C00
 
 /* ---------------------------------------------------------------------------
  * String and data table
@@ -146,24 +155,30 @@ start:
     movw    %ax, %ds
     movw    %ax, %es
     movw    %ax, %ss
-    movw    $0x7A00, %sp
+    movw    $0x6000, %sp
     sti
 
 /* ===========================================================================
- * Relocation — copy 512 bytes from 0x7C00 to 0x7A00
+ * Relocation — copy 512 bytes from 0x7C00 to 0x6000, then far jump there.
+ *
+ * The far jump is encoded as raw bytes (0xEA + offset word + segment word)
+ * because GAS far jump syntax does not accept arithmetic expressions in
+ * the offset field.  The target is after_reloc in the relocated copy:
+ *   offset = 0x6000 + (after_reloc - 0x7C00)
+ *   segment = 0x0000
  * =========================================================================*/
 relocate:
     movw    $0x7C00, %si
-    movw    $0x7A00, %di
+    movw    $0x6000, %di
     movw    $256, %cx
     rep     movsw
 
-    .byte   0xEA
-    .word   0x7A00 + (after_reloc - 0x7C00)
-    .word   0x0000
+    .byte   0xEA                            # far jump opcode
+    .word   0x6000 + (after_reloc - 0x7C00) # offset in relocated copy
+    .word   0x0000                          # segment
 
 /* ===========================================================================
- * Execution continues here in the relocated copy at 0x7A00.
+ * Execution continues here in the relocated copy at 0x6000.
  * =========================================================================*/
 after_reloc:
     movw    $str_boot_from+RDELTA, %si
@@ -255,21 +270,39 @@ do_floppy:
  * DL saved in BL across reset (some XT BIOSes corrupt DL during reset).
  * Pre-VBR CR+LF emitted by calling print_str on the \r\n\0 embedded inside
  * str_disk_err at offset +10, avoiding an 8-byte inline MOV/INT sequence.
+ *
+ * The far jump to the VBR is encoded as raw bytes (0xEA + 0x7C00 + 0x0000)
+ * because GAS far jump syntax does not accept arithmetic expressions in
+ * the offset field — though in this case the target is a literal 0x7C00
+ * and raw encoding is used here for consistency with the relocation jump.
+ *
+ * Retry loop: floppy drives require up to 3 attempts to allow the disk
+ * motor time to reach stable speed.  The reset is retried each pass.
+ * If the reset itself fails we proceed to the read anyway — a failed reset
+ * will produce a failed read, handled by the retry loop.  After 3 consecutive
+ * read failures we report disk_error.  This follows the convention of most
+ * XT-class MBR boot blocks.
  * =========================================================================*/
 do_chs_read:
-    movb    %dl, %bl                # save drive number
+    movb    %dl, %bl                # save drive number across reset
 
+    movw    $3, %cx                 # retry counter (3 attempts)
+.Lretry:
     movb    $0x00, %ah              # INT 13h/00h = reset
     int     $0x13
-    jc      disk_error
+    # jc not checked after reset — a reset failure produces a read
+    # failure on the next instruction, caught by the retry loop.
 
-    movb    %bl, %dl                # restore drive number
+    movb    %bl, %dl                # restore drive number (BIOS may corrupt)
 
     movb    $0x02, %ah              # INT 13h/02h = read sectors
     movb    $0x01, %al
     movw    $0x7C00, %bx
     int     $0x13
-    jc      disk_error
+    jnc     .Lread_ok               # success — proceed to VBR check
+    loop    .Lretry                 # read failed — decrement CX, retry
+    jmp     disk_error              # all 3 attempts failed
+.Lread_ok:
 
     cmpb    $0x55, 0x7DFE
     jne     bad_vbr
@@ -281,6 +314,8 @@ do_chs_read:
     movw    $str_disk_err+10+RDELTA, %si
     call    print_str
 
+    # Far-jump to VBR at 0x0000:0x7C00 — DL = boot drive (IBM BIOS convention).
+    # Encoded as raw bytes for consistency with the relocation jump above.
     .byte   0xEA
     .word   0x7C00
     .word   0x0000
@@ -332,7 +367,7 @@ display_list:
     pushw   %cx                     # save LOOP counter
     movb    %bl, %al
     subb    $'1', %al               # 0-based index
-    xorb    %ah, %ah                # AX = index
+    cbtw                            # AX = index (AL is 0-3; cbtw = xorb %ah,%ah here)
     movb    $4, %cl
     shlw    %cl, %ax                # AX = index * 16
     addw    $part_labels+RDELTA, %ax
@@ -342,7 +377,7 @@ display_list:
     # Recalculate SI to partition entry (%cl still 4, %cx still on stack)
     movb    %bl, %al
     subb    $'1', %al
-    xorb    %ah, %ah
+    cbtw                            # AX = index (cbtw saves 1 byte vs xorb %ah,%ah)
     shlw    %cl, %ax                # AX = index * 16  (%cl still = 4)
     addw    $0x7BBE, %ax
     movw    %ax, %si
@@ -375,18 +410,23 @@ print_str:
 /* ===========================================================================
  * Signature and partition table.
  *
- * "mbr88" (5 bytes, no null) is placed at MBR offset 0x1B9, immediately
- * after the last byte of code.  Magic numbers are identified by position
- * and length, not by null termination — 0x55AA itself has no null.
- * Offsets 0x1B8-0x1BD are the conventional reserved disk signature area.
+ * 'mbr88' (5 bytes) is placed at MBR offset 0x1B8 followed immediately by
+ * the version byte 0x01 at 0x1BD.  Version encoding: high nibble = major,
+ * low nibble = minor (0x01 = v0.1).
+ *
+ * The binary is fully packed — only 1 zero pad byte remains at 0x1B7.
+ *
+ * .org is relative to section base (0x7C00 set by -Ttext=0x7C00).
  * =========================================================================*/
-    .org    0x1B9               # advance to signature (immediately after code)
+    .org    0x1B8               # advance to signature (1 zero pad byte at 0x1B7)
 
 mbr_sig:
-    .ascii  "mbr88"             # 5-byte magic: 6D 62 72 38 38
+    .ascii  "mbr88"             # 5-byte signature: 6D 62 72 38 38
+mbr_ver:
+    .byte   0x01                # version 0.1 (major=0, minor=1)
 
 part_table:
-    .fill   64, 1, 0                # written by mbr_patch.py
+    .fill   64, 1, 0            # written by mbr_patch
 
     .org    0x1FE
     .byte   0x55

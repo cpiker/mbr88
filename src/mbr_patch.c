@@ -45,17 +45,19 @@
  *   that informed the design of the mbr88 boot records this tool supports.
  *   https://wiki.osdev.org/MBR_(x86)
  *
- * Build (cross-compile for ELKS):
+ * Build (native Linux / development):
+ *   gcc -std=c99 -Wall -o mbr_patch_native mbr_patch.c
+ *
+ * Build (cross-compile for ELKS, ia16-elf-gcc):
  *   ia16-elf-gcc -melks -Os -o mbr_patch mbr_patch.c
  *
- * Build (native Linux, for testing):
- *   gcc -std=c99 -Wall -o mbr_patch mbr_patch.c
+ * Build (FreeDOS, Open Watcom — model TBD: tiny or small):
+ *   wcl -ms mbr_patch.c -o mbr_patch.exe
  *
- * Design notes for ELKS:
+ * Design notes for ELKS / Open Watcom:
  *   - No malloc/heap: all buffers are static globals or small stack locals.
  *   - No floating point: sizes use integer KB/MB arithmetic.
  *   - Explicit unsigned char/unsigned long for clarity on 16-bit targets.
- *   - File I/O uses POSIX open/read/write/close.
  *   - Global variables used freely as permitted for this codebase.
  *
  * IBM XT / CHS partition entry layout (16 bytes, little-endian):
@@ -67,12 +69,38 @@
  *   Bytes 12-15  LBA size  (32-bit little-endian)
  */
 
+/* -------------------------------------------------------------------------
+ * Portability: POSIX (gcc/ia16-elf-gcc) vs Open Watcom
+ * -----------------------------------------------------------------------*/
+#ifdef __WATCOMC__
+#  include <io.h>
+#  include <fcntl.h>
+#  define O_RDONLY   _O_RDONLY
+#  define O_WRONLY   _O_WRONLY
+#  define O_CREAT    _O_CREAT
+#  define O_TRUNC    _O_TRUNC
+#  define OPEN_MODE  0
+#else
+#  include <unistd.h>
+#  include <fcntl.h>
+#  include <sys/stat.h>
+#  define OPEN_MODE  0644
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/stat.h>
+
+/* -------------------------------------------------------------------------
+ * mbr88 blank template — included from generated header
+ * -----------------------------------------------------------------------*/
+
+#include "mbr88_template.h"
+
+/* Catch any future mismatch between size constants at compile time */
+typedef char mbr_size_check_[
+    (MBR88_TEMPLATE_SIZE == 512) ? 1 : -1
+];
 
 /* -------------------------------------------------------------------------
  * Constants
@@ -83,9 +111,6 @@
 #define ENTRY_SIZE        16
 #define NUM_ENTRIES       4
 #define BOOTSIG_OFFSET    0x1FE
-
-#define MBR88_SIG_OFFSET  0x1B9
-#define MBR88_SIG_LEN     5
 
 #define LABEL_BASE        0x43
 #define LABEL_SLOT_SZ     16
@@ -99,19 +124,6 @@
 #define DEFAULT_HEADS     16
 #define DEFAULT_SECTORS   17
 
-static const char MBR88_SIG[MBR88_SIG_LEN] = {'m','b','r','8','8'};
-
-/* -------------------------------------------------------------------------
- * mbr88 blank template — included from detached header
- * -----------------------------------------------------------------------*/
-
-#include "mbr88_template.h"
-
-/* Catch any future mismatch between the two size constants at compile time */
-typedef char mbr_size_check_[
-    (MBR88_TEMPLATE_SIZE == MBR_SIZE) ? 1 : -1
-];
-
 /* -------------------------------------------------------------------------
  * Session state globals
  * -----------------------------------------------------------------------*/
@@ -121,7 +133,7 @@ static char          mbr_path[256];
 static int           file_exists;
 static int           has_mbr88_sig;
 static int           dirty;
-static int           geo_heads;      /* 0 = not set yet */
+static int           geo_heads;
 static int           geo_sectors;
 
 /* -------------------------------------------------------------------------
@@ -202,10 +214,6 @@ static void build_label_slot(unsigned char slot[LABEL_SLOT_SZ],
     slot[len+2] = '\0';
 }
 
-/*
- * Copy the label for slot_0based into buf (must be LABEL_MAX+1 bytes).
- * Strips trailing CR/LF/spaces.
- */
 static void read_label(int slot_0based, char buf[LABEL_MAX + 1])
 {
     int off = LABEL_BASE + slot_0based * LABEL_SLOT_SZ;
@@ -231,7 +239,30 @@ static void write_label(int slot_0based, const char *text)
 
 static int detect_mbr88(void)
 {
-    return memcmp(mbr + MBR88_SIG_OFFSET, MBR88_SIG, MBR88_SIG_LEN) == 0;
+    return memcmp(mbr + MBR88_SIG_OFFSET,
+                  MBR88_TEMPLATE + MBR88_SIG_OFFSET,
+                  MBR88_SIG_LEN) == 0;
+}
+
+/*
+ * Read version byte from MBR88_VER_OFFSET.
+ * Returns major in high nibble, minor in low nibble.
+ * Caller formats as "vX.Y".
+ */
+static unsigned char mbr88_version(void)
+{
+    return mbr[MBR88_VER_OFFSET];
+}
+
+/*
+ * Return 1 if label editing is supported for the loaded MBR.
+ * Label slot format is only understood for mbr88 v0.1 exactly.
+ * Any other version (including future ones) is unsupported — the
+ * caller should direct the user to get a newer mbr_patch.
+ */
+static int labels_supported(void)
+{
+    return detect_mbr88() && (mbr88_version() == 0x01);
 }
 
 static void upgrade_to_mbr88(void)
@@ -252,7 +283,7 @@ static int copy_file(const char *src, const char *dst)
     int fdin, fdout, n, result = 0;
     fdin = open(src, O_RDONLY);
     if (fdin < 0) { perror(src); return -1; }
-    fdout = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fdout = open(dst, O_WRONLY | O_CREAT | O_TRUNC, OPEN_MODE);
     if (fdout < 0) { perror(dst); close(fdin); return -1; }
     while ((n = read(fdin, buf, sizeof(buf))) > 0) {
         if (write(fdout, buf, n) != n) { perror(dst); result = -1; break; }
@@ -337,10 +368,6 @@ static int is_empty(int slot_0based)
             && e[5]==0 && e[6]==0 && e[7]==0);
 }
 
-/*
- * Format a size string from a sector count into buf (at least 24 bytes).
- * No floating point.
- */
 static void fmt_size(char *buf, unsigned long sectors)
 {
     unsigned long b = sectors * 512UL;
@@ -352,12 +379,6 @@ static void fmt_size(char *buf, unsigned long sectors)
         sprintf(buf, "%lu B", b);
 }
 
-/*
- * Fill lines[0..6] with COL_WIDTH-wide strings for one partition column.
- * Always produces exactly 7 lines so the two columns zip cleanly.
- */
-
-/* Write a left-padded string into one column line. */
 static void col_row(char line[COL_WIDTH+1], const char *s)
 {
     snprintf(line, COL_WIDTH+1, "%-*.*s", COL_WIDTH, COL_WIDTH, s);
@@ -367,7 +388,7 @@ static void col_lines(int slot_1based, char lines[7][COL_WIDTH + 1])
 {
     int i = slot_1based - 1;
     int n;
-    char tmp[64];   /* large enough for any formatted column row */
+    char tmp[64];
 
     if (is_empty(i)) {
         snprintf(tmp, sizeof(tmp), " Partition %d", slot_1based);
@@ -417,8 +438,6 @@ static void col_lines(int slot_1based, char lines[7][COL_WIDTH + 1])
         snprintf(tmp,sizeof(tmp),"  End:   C=%-4d H=%-3d S=%d",
                  cyl_e, head_e, sec_e);
         col_row(lines[4], tmp);
-
-        /* Size: abbreviate "sectors" to fit in 38 chars */
         snprintf(tmp, sizeof(tmp), "  Size:  %s (%lu sec)", size_buf, lba_size);
         col_row(lines[5], tmp);
         col_row(lines[6], "");
@@ -431,14 +450,14 @@ static void print_table(void)
     char right[7][COL_WIDTH+1];
     char gap[COL_GAP+1];
     char title[LINE_WIDTH+1];
-    const char *sig_tag, *geo_tag_fmt;
+    const char *sig_tag;
     char geo_buf[32];
-    int n;
+    char ver_buf[16];
+    int n, len, pad, rpad;
 
     memset(gap, ' ', COL_GAP);
     gap[COL_GAP] = '\0';
 
-    /* Header */
     for (n = 0; n < LINE_WIDTH; n++) putchar('=');
     putchar('\n');
 
@@ -446,18 +465,14 @@ static void print_table(void)
         snprintf(title, sizeof(title), "MBR Partition Table  (* unsaved changes)");
     else
         snprintf(title, sizeof(title), "MBR Partition Table");
-    /* Centre the title */
-    {
-        int len   = (int)strlen(title);
-        int pad   = (LINE_WIDTH - len) / 2;
-        int rpad  = LINE_WIDTH - len - pad;
-        printf("%*s%s%*s\n", pad, "", title, rpad, "");
-    }
+    len  = (int)strlen(title);
+    pad  = (LINE_WIDTH - len) / 2;
+    rpad = LINE_WIDTH - len - pad;
+    printf("%*s%s%*s\n", pad, "", title, rpad, "");
 
     for (n = 0; n < LINE_WIDTH; n++) putchar('=');
     putchar('\n');
 
-    /* Top row: partitions 1 and 2 */
     col_lines(1, left);
     col_lines(2, right);
     for (n = 0; n < 7; n++)
@@ -466,7 +481,6 @@ static void print_table(void)
     for (n = 0; n < LINE_WIDTH; n++) putchar('-');
     putchar('\n');
 
-    /* Bottom row: partitions 3 and 4 */
     col_lines(3, left);
     col_lines(4, right);
     for (n = 0; n < 7; n++)
@@ -476,19 +490,28 @@ static void print_table(void)
     putchar('\n');
 
     /* Status bar */
-    sig_tag = has_mbr88_sig ? "[mbr88]" : "[generic MBR]";
-    if (geo_heads) {
+    if (has_mbr88_sig) {
+        unsigned char ver = mbr88_version();
+        snprintf(ver_buf, sizeof(ver_buf), "[mbr88 v%d.%d]",
+                 (ver >> 4) & 0x0F, ver & 0x0F);
+        sig_tag = ver_buf;
+    } else {
+        sig_tag = "[generic MBR]";
+    }
+
+    if (geo_heads)
         snprintf(geo_buf, sizeof(geo_buf), "Geometry: %dH/%dS",
                  geo_heads, geo_sectors);
-        geo_tag_fmt = geo_buf;
-    } else {
-        geo_tag_fmt = "Geometry:";
-    }
-    /* Extract basename from mbr_path */
+    else
+        geo_buf[0] = '\0';   /* blank until set — use 'g' to configure */
+
     {
         const char *base = strrchr(mbr_path, '/');
         base = base ? base + 1 : mbr_path;
-        printf("  File: %s  %s  %s\n\n", base, sig_tag, geo_tag_fmt);
+        if (geo_buf[0])
+            printf("  File: %s  %s  %s\n\n", base, sig_tag, geo_buf);
+        else
+            printf("  File: %s  %s  Geometry:\n\n", base, sig_tag);
     }
 }
 
@@ -645,8 +668,9 @@ static void cmd_bootable(void)
     dirty = 1;
     printf("  Partition %d is now %s (0x%02X).\n", slot,
            new_val == 0x80 ? "Bootable" : "Inactive", new_val);
-    printf("  Note: mbr88 uses the boot menu selection rather than this flag,\n");
-    printf("  but other MBR loaders may depend on it.\n");
+    printf("  Note: mbr88 always presents the boot menu and waits for\n");
+    printf("  user input — any or all partitions may be marked bootable.\n");
+    printf("  Other MBR loaders may auto-boot the first bootable partition.\n");
 }
 
 static void cmd_label(void)
@@ -675,7 +699,7 @@ static void cmd_label(void)
     for (;;) {
         printf("  New label (up to %d chars): ", LABEL_MAX);
         fflush(stdout);
-        if (!read_line(label_buf, sizeof(label_buf))) { exit(1); }
+        if (!read_line(label_buf, sizeof(label_buf))) exit(1);
         if ((int)strlen(label_buf) <= LABEL_MAX) break;
         printf("  Label too long — maximum %d characters.\n", LABEL_MAX);
     }
@@ -713,7 +737,6 @@ static void cmd_write(void)
         return;
     }
 
-    /* Backup immediately before writing */
     if (file_exists) {
         snprintf(bak, sizeof(bak), "%s.bak", mbr_path);
         if (copy_file(mbr_path, bak) == 0)
@@ -724,7 +747,7 @@ static void cmd_write(void)
         }
     }
 
-    fd = open(mbr_path, O_WRONLY | O_CREAT, 0644);
+    fd = open(mbr_path, O_WRONLY | O_CREAT, OPEN_MODE);
     if (fd < 0) { perror(mbr_path); return; }
     n = write(fd, mbr, MBR_SIZE);
     close(fd);
@@ -761,28 +784,55 @@ static void cmd_help(void)
     putchar('\n');
 }
 
+/* -------------------------------------------------------------------------
+ * Help text — full version for native builds, minimal for target builds
+ * -----------------------------------------------------------------------*/
+
+#if defined(__IA16__) || defined(__WATCOMC__)
+
 static void print_help(void)
 {
-    puts("mbr_patch — Interactive IBM XT-style MBR partition table editor");
+    puts("mbr_patch <file>          view MBR info");
+    puts("mbr_patch -p <file>       patch existing MBR");
+    puts("mbr_patch -u <file>       upgrade existing MBR to mbr88");
+    puts("mbr_patch -n <file>       create new blank mbr88 image");
+    puts("Use -h on a native system for full help.");
+}
+
+#else
+
+static void print_help(void)
+{
+    puts("mbr_patch — IBM XT-style MBR partition table viewer and editor");
     puts("");
     puts("Usage:");
-    puts("  mbr_patch <mbr_file>");
-    puts("  mbr_patch -u <mbr_file>");
-    puts("  mbr_patch -h | --help");
+    puts("  mbr_patch        <mbr_file>   View partition table and exit");
+    puts("  mbr_patch -p     <mbr_file>   Patch an existing MBR");
+    puts("  mbr_patch -u     <mbr_file>   Upgrade existing MBR to mbr88");
+    puts("  mbr_patch -n     <mbr_file>   Create a new blank mbr88 image");
+    puts("  mbr_patch -h | --help         Show this help text and exit");
     puts("");
-    puts("Arguments:");
-    puts("  <mbr_file>   Path to a 512-byte MBR binary image to view or edit.");
-    puts("               A backup (<mbr_file>.bak) is written immediately");
-    puts("               before any changes are committed to disk.");
+    puts("Modes:");
+    puts("  (no flag)  Read-only view.  Prints the partition table and exits.");
+    puts("             The file must exist, be exactly 512 bytes, and have a");
+    puts("             valid 55 AA boot signature.  Exits non-zero on error.");
     puts("");
-    puts("Options:");
-    puts("  -u           Upgrade mode.  Replace the boot code with the mbr88");
-    puts("               boot record while preserving the existing partition");
-    puts("               table entries.  Enables full label editing regardless");
-    puts("               of what was in the file before.  If <mbr_file> does");
-    puts("               not exist it will be created from scratch as a blank");
-    puts("               mbr88 image ready for partition entry.");
-    puts("  -h, --help   Show this help text and exit.");
+    puts("  -p         Patch.  Interactively edit the partition table of an");
+    puts("             existing MBR file.  The file must pass the same validity");
+    puts("             checks as the view mode.  Label editing is enabled only");
+    puts("             for mbr88 v0.1 images.  Unknown mbr88 versions display");
+    puts("             a message directing you to get a newer mbr_patch.");
+    puts("");
+    puts("  -u         Upgrade.  Replace the boot code of an existing MBR with");
+    puts("             the mbr88 v0.1 boot record, preserving the partition");
+    puts("             table entries.  The file must exist and be valid.  Label");
+    puts("             editing is always available after upgrade.");
+    puts("");
+    puts("  -n         New.  Create a blank mbr88 v0.1 image from scratch.");
+    puts("             The target file must NOT exist (safety check).  Enters");
+    puts("             the same interactive session as -p with labels enabled.");
+    puts("");
+    puts("A backup (<mbr_file>.bak) is written immediately before any write.");
     puts("");
     puts("Interactive commands (type 'h' at the prompt for a summary):");
     puts("  g  Set drive geometry       n  New / redefine partition");
@@ -791,16 +841,61 @@ static void print_help(void)
     puts("  p  Print table              t  List type codes");
     puts("  w  Write to disk            q  Quit");
     puts("");
-    puts("mbr88 signature:");
-    puts("  If the 5-byte signature 'mbr88' is present at offset 0x1B9,");
-    puts("  label editing is enabled.  Without it only the partition table");
-    puts("  entries are written; the rest of the MBR is left untouched.");
-    puts("  Use -u to upgrade any MBR to mbr88.");
+    puts("mbr88 label editing:");
+    puts("  Labels are stored in the MBR at offset 0x43 and displayed in the");
+    puts("  boot menu next to the partition number.  They are only supported");
+    puts("  for mbr88 v0.1 images.  If a newer mbr88 version is detected,");
+    puts("  get an updated mbr_patch from: https://github.com/cpiker/mbr88");
+    puts("");
+    puts("Bootable flag:");
+    puts("  mbr88 always presents the boot menu and waits for user input,");
+    puts("  so any or all partitions may be marked bootable.  Other MBR");
+    puts("  loaders may auto-boot the first bootable partition.");
     puts("");
     puts("Examples:");
-    puts("  mbr_patch mbr.bin");
-    puts("  mbr_patch -u mbr.bin");
-    puts("  mbr_patch -u new.bin     (create from scratch)");
+    puts("  mbr_patch mbr.bin              view current partition table");
+    puts("  mbr_patch -p mbr.bin           edit an existing MBR");
+    puts("  mbr_patch -u mbr.bin           upgrade to mbr88, then edit");
+    puts("  mbr_patch -n new.bin           create a fresh mbr88 image");
+}
+
+#endif /* __IA16__ || __WATCOMC__ */
+
+/* -------------------------------------------------------------------------
+ * Validity check — shared by all modes that require a valid MBR file
+ * -----------------------------------------------------------------------*/
+
+/*
+ * Read mbr_path into the global mbr buffer.  Checks:
+ *   - file exists and can be opened
+ *   - exactly 512 bytes readable
+ *   - boot signature 55 AA at 0x1FE
+ * Prints an error and returns non-zero on any failure.
+ */
+static int load_and_validate(void)
+{
+    int fd, n;
+
+    fd = open(mbr_path, O_RDONLY);
+    if (fd < 0) {
+        perror(mbr_path);
+        return 1;
+    }
+    n = read(fd, mbr, MBR_SIZE);
+    close(fd);
+
+    if (n != MBR_SIZE) {
+        fprintf(stderr, "Error: '%s' is not 512 bytes.\n", mbr_path);
+        return 1;
+    }
+    if (mbr[BOOTSIG_OFFSET] != 0x55 || mbr[BOOTSIG_OFFSET+1] != 0xAA) {
+        fprintf(stderr,
+                "Error: '%s' has no valid MBR signature (55 AA) at 0x1FE.\n",
+                mbr_path);
+        return 1;
+    }
+    file_exists = 1;
+    return 0;
 }
 
 /* -------------------------------------------------------------------------
@@ -809,73 +904,123 @@ static void print_help(void)
 
 int main(int argc, char *argv[])
 {
-    int  upgrade_mode = 0;
-    int  fd, n;
+    /* mode flags — exactly one will be set */
+    int mode_view    = 0;
+    int mode_patch   = 0;
+    int mode_upgrade = 0;
+    int mode_new     = 0;
+
+    int  fd;
     char cmd_buf[8];
 
-    if (argc == 2 && (strcmp(argv[1],"-h")==0 || strcmp(argv[1],"--help")==0)){
+    /* -h / --help */
+    if (argc == 2 && (strcmp(argv[1],"-h")==0 || strcmp(argv[1],"--help")==0)) {
         print_help();
         return 0;
     }
 
-    if (argc >= 2 && strcmp(argv[1], "-u") == 0) {
-        upgrade_mode = 1;
-        argv++; argc--;
-    }
-
-    if (argc != 2) {
-        fprintf(stderr, "Usage: mbr_patch [-u] <mbr_file>\n");
+    /* Parse optional mode flag */
+    if (argc == 3) {
+        if      (strcmp(argv[1], "-p") == 0) mode_patch   = 1;
+        else if (strcmp(argv[1], "-u") == 0) mode_upgrade = 1;
+        else if (strcmp(argv[1], "-n") == 0) mode_new     = 1;
+        else {
+            fprintf(stderr, "Unknown option '%s'.\n", argv[1]);
+            fprintf(stderr, "Usage: mbr_patch [-p|-u|-n] <mbr_file>\n");
+            return 1;
+        }
+        strncpy(mbr_path, argv[2], sizeof(mbr_path) - 1);
+    } else if (argc == 2) {
+        mode_view = 1;
+        strncpy(mbr_path, argv[1], sizeof(mbr_path) - 1);
+    } else {
+        fprintf(stderr, "Usage: mbr_patch [-p|-u|-n] <mbr_file>\n");
         fprintf(stderr, "       mbr_patch -h | --help\n");
         return 1;
     }
-
-    strncpy(mbr_path, argv[1], sizeof(mbr_path) - 1);
     mbr_path[sizeof(mbr_path)-1] = '\0';
 
-    /* Try to open the file */
-    fd = open(mbr_path, O_RDONLY);
-    if (fd >= 0) {
-        n = read(fd, mbr, MBR_SIZE);
-        close(fd);
-        if (n < MBR_SIZE) {
-            fprintf(stderr, "Error: '%s' is smaller than 512 bytes.\n", mbr_path);
+    /* ------------------------------------------------------------------ */
+    /* Mode 1: view — read, validate, print, exit                         */
+    /* ------------------------------------------------------------------ */
+    if (mode_view) {
+        if (load_and_validate() != 0)
+            return 1;
+
+        /* Determine signature/label status for display only */
+        if (detect_mbr88()) {
+            unsigned char ver = mbr88_version();
+            has_mbr88_sig = labels_supported();
+            printf("mbr88 v%d.%d\n",
+                   (ver >> 4) & 0x0F, ver & 0x0F);
+        }
+        print_table();
+        return 0;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Mode 4: new — file must NOT exist                                   */
+    /* ------------------------------------------------------------------ */
+    if (mode_new) {
+        fd = open(mbr_path, O_RDONLY);
+        if (fd >= 0) {
+            close(fd);
+            fprintf(stderr,
+                    "Error: '%s' already exists.  Use -u to upgrade an "
+                    "existing MBR,\n"
+                    "       or remove the file first.\n", mbr_path);
             return 1;
         }
-        file_exists = 1;
-    } else if (upgrade_mode) {
-        memset(mbr, 0, MBR_SIZE);
-        file_exists = 0;
-    } else {
-        perror(mbr_path);
-        return 1;
-    }
-
-    if (file_exists && !upgrade_mode
-        && (mbr[BOOTSIG_OFFSET] != 0x55 || mbr[BOOTSIG_OFFSET+1] != 0xAA))
-        printf("Warning: boot signature at 0x1FE is not 55 AA.\n");
-
-    if (upgrade_mode) {
-        upgrade_to_mbr88();
+        memcpy(mbr, MBR88_TEMPLATE, MBR_SIZE);
         has_mbr88_sig = 1;
-        if (file_exists)
-            puts("Upgrade mode: boot code replaced, partition table preserved.");
-        else
-            printf("Upgrade mode: new mbr88 image '%s' (blank partition table).\n",
-                   mbr_path);
-        puts("  Use 'l' to set labels, 'w' to write when done.");
-    } else {
-        has_mbr88_sig = detect_mbr88();
-        if (has_mbr88_sig)
-            puts("mbr88 boot record — label editing enabled.");
-        else {
-            puts("Generic MBR — partition table editing only.");
-            puts("Use -u to upgrade to mbr88 and enable label editing.");
-        }
+        file_exists   = 0;
+        puts("New mbr88 v0.1 image (blank partition table).");
+        puts("  Use 'g' then 'n' to define partitions, 'l' for labels, 'w' to write.");
+        print_table();
+        /* fall through to command loop */
     }
 
-    print_table();
+    /* ------------------------------------------------------------------ */
+    /* Modes 2 and 3: patch / upgrade — file must exist and be valid      */
+    /* ------------------------------------------------------------------ */
+    if (mode_patch || mode_upgrade) {
+        if (load_and_validate() != 0)
+            return 1;
 
-    /* Command loop */
+        if (mode_upgrade) {
+            upgrade_to_mbr88();
+            has_mbr88_sig = 1;
+            dirty = 1;   /* boot code was replaced — treat as unsaved change */
+            puts("Upgrade: boot code replaced with mbr88 v0.1, "
+                 "partition table preserved.");
+            puts("  Use 'l' to set labels, 'w' to write when done.");
+        } else {
+            /* mode_patch: detect signature and version */
+            if (detect_mbr88()) {
+                unsigned char ver = mbr88_version();
+                if (labels_supported()) {
+                    has_mbr88_sig = 1;
+                    printf("mbr88 v%d.%d — label editing enabled.\n",
+                           (ver >> 4) & 0x0F, ver & 0x0F);
+                } else {
+                    has_mbr88_sig = 0;
+                    printf("mbr88 v%d.%d detected — label editing not supported "
+                           "by this version of mbr_patch.\n",
+                           (ver >> 4) & 0x0F, ver & 0x0F);
+                    puts("  Get a newer mbr_patch: https://github.com/cpiker/mbr88");
+                }
+            } else {
+                has_mbr88_sig = 0;
+                puts("Generic MBR — partition table editing only.");
+                puts("  Use -u to upgrade to mbr88 and enable label editing.");
+            }
+        }
+        print_table();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Command loop — shared by -p, -u, -n                                */
+    /* ------------------------------------------------------------------ */
     for (;;) {
         int redraw = 0;
         printf("Command (h for help): "); fflush(stdout);
