@@ -735,7 +735,7 @@ static void cmd_write(void)
     }
 
     print_table();
-    if (!ask_yn("Write changes to disk? (Y/N): ")) {
+    if (!ask_yn("Write changes to file? (Y/N): ")) {
         printf("  Write cancelled.\n");
         return;
     }
@@ -750,7 +750,7 @@ static void cmd_write(void)
         }
     }
 
-    fd = open(mbr_path, O_WRONLY | O_CREAT, OPEN_MODE);
+    fd = open(mbr_path, O_WRONLY | O_CREAT | O_TRUNC, OPEN_MODE);
     if (fd < 0) { perror(mbr_path); return; }
     n = write(fd, mbr, MBR_SIZE);
     close(fd);

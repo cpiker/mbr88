@@ -93,12 +93,50 @@
  *   field — only simple labels or literal values.  The raw encoding
  *   (0xEA followed by offset word and segment word) is the standard
  *   workaround used in MBR and bootloader code.
+ *
+ * CX/CL aliasing in display_list:
+ *   LOOP uses the full 16-bit CX as its counter.  CL is the low byte of CX.
+ *   MOVB $4,%cl inside the loop body would silently reset CX to 4 on every
+ *   non-empty iteration, preventing the loop from ever counting down to zero.
+ *   We PUSHW %cx before loading %cl and POPW %cx after all SHLW operations
+ *   to protect the counter across the label-address calculation.
+ *
+ * cbtw used for zero-extension (saves 1 byte vs xorb %ah,%ah):
+ *   In two places the code needs AH=0 to zero-extend AL into AX before a
+ *   multiply-by-16 shift.  AL holds a partition index (always 0-3), so it
+ *   is never negative and CBTW (sign-extend AL into AX) produces the same
+ *   result as XORB %AH,%AH.  CBTW encodes in 1 byte vs 2 for XORB.
+ *   The byte saved in wait_key was spent on the explicit MOVB $0x0E,%AH
+ *   before the '>' prompt (see below).
+ *
+ * AH undefined after INT 10h/0Eh:
+ *   The BIOS specification leaves AH undefined on return from INT 10h/0Eh
+ *   (teletype output).  Relying on AH surviving the call is fragile and
+ *   breaks on some real and emulated BIOSes.  Every INT 10h call in this
+ *   code is preceded by an explicit MOVB $0x0E,%AH.  The '>' prompt after
+ *   display_list therefore sets AH explicitly rather than assuming it
+ *   survives from the last call inside display_list.  The 2-byte cost of
+ *   MOVB $0x0E,%AH was funded by the 1-byte cbtw saving plus the last
+ *   zero pad byte. Subsequent changes have restored ~7 bytes of slack.
+ *
+ * Stack placement:
+ *   SP is initialised to 0x6000 — the base address of our relocated copy.
+ *   The 8088 stack grows downward, so pushes begin writing below 0x6000
+ *   into the unused region 0x5FFE, 0x5FFC, ... well away from both the
+ *   IVT (0x0000) and the relocated code (0x6000-0x61FF), giving roughly
+ *   22 KB of safe stack space.
  * ===========================================================================*/
 
     .arch   i8086,jumps
     .code16
 
     .equ    RDELTA, 0x6000 - 0x7C00    # = -0x1C00
+    # PTABLE: runtime address of the partition table in the relocated image.
+    # part_table assembles at ORG-base 0x7C00 + 0x1BE = 0x7DBE (load-time).
+    # After relocation to 0x6000: 0x7DBE + RDELTA = 0x7DBE - 0x1C00 = 0x61BE.
+    # GAS cannot use label+RDELTA in an addw $imm operand the way NASM can,
+    # so the value is pre-computed here as a named constant.
+    .equ    PTABLE, 0x7C00 + 0x1BE + RDELTA  # = 0x61BE
 
 /* ---------------------------------------------------------------------------
  * String and data table
@@ -155,7 +193,7 @@ start:
     movw    %ax, %ds
     movw    %ax, %es
     movw    %ax, %ss
-    movw    $0x6000, %sp
+    movw    $0x6000, %sp            # stack grows down from 0x6000 into free low memory
     sti
 
 /* ===========================================================================
@@ -187,8 +225,10 @@ after_reloc:
     call    display_list            # floppy lines + partition lines
 
     # Print ">" prompt.
-    # AH=0Eh and BH=0x00 are still set from the last print_str call inside
-    # display_list, so only AL needs loading before INT 10h.
+    # BH=0x00 is preserved across INT 10h/0Eh (page number, never modified on return).
+    # AH is undefined on return from INT 10h/0Eh on some BIOSes, so set explicitly.
+    # The byte cost is funded by cbtw in wait_key (below).
+    movb    $0x0E, %ah
     movb    $'>', %al
     int     $0x10
 
@@ -215,22 +255,26 @@ wait_key:
     ja      wait_key
 
     subb    $'1', %al               # '1'->0  '2'->1  '3'->2  '4'->3
-    movb    %al, %bl
+    movb    %al, %bl                # save index in BL — cbtw below zeros AH,
+                                    # leaving BL as the only intact copy of the index
 
-    xorb    %ah, %ah
+    cbtw                            # zero-extend AL into AX (AL is 0-3, never negative,
+                                    # so CBTW = XORB %AH,%AH here but costs 1 byte instead of 2;
+                                    # the saved byte was spent on MOVB $0x0E,%AH for the '>' prompt)
     movb    $4, %cl
     shlw    %cl, %ax                # AX = index * 16
-    addw    $0x7BBE, %ax
+    addw    $PTABLE, %ax
     movw    %ax, %si
 
-    cmpb    $0x00, 4(%si)           # reject empty slot
-    je      wait_key
+    cmpb    $0x80, (%si)            # only accept bootable (0x80) partitions;
+    jne     wait_key                # status 0x00 covers both empty and non-bootable slots
 
-    movb    $0x0E, %ah
+    # Save chosen digit char for error reporting (bad_vbr prints it).
+    # No explicit echo — bad_vbr echoes scratch_char on failure,
+    # and on success the pre-VBR CR+LF fires cleanly without a digit.
+    # INT 16h/00h does not echo keystrokes on PC BIOS.
     movb    %bl, %al
-    addb    $'1', %al
-    movb    $0x00, %bh
-    int     $0x10
+    addb    $'1', %al               # convert 0-based index back to digit char
     movb    %al, scratch_char+RDELTA
 
     movb    $0x80, %dl
@@ -250,14 +294,13 @@ boot_floppy_b:
     movb    $0x01, %dl
 
 do_floppy:
-    movb    $0x0E, %ah
+    # Set AL = 'A' or 'B' for scratch_char (bad_vbr prints it on failure).
+    # No explicit echo — same reasoning as wait_key above.
     movb    $'A', %al
     cmpb    $0x01, %dl
-    jne     .Lecho_letter
+    jne     .Lset_scratch
     movb    $'B', %al
-.Lecho_letter:
-    movb    $0x00, %bh
-    int     $0x10
+.Lset_scratch:
     movb    %al, scratch_char+RDELTA
 
     movb    $0x00, %ch
@@ -282,11 +325,21 @@ do_floppy:
  * will produce a failed read, handled by the retry loop.  After 3 consecutive
  * read failures we report disk_error.  This follows the convention of most
  * XT-class MBR boot blocks.
+ *
+ * Register allocation inside do_chs_read:
+ *   BL  drive number — saved here because INT 13h/00h reset may corrupt DL.
+ *   DI  CHS fields (CX on entry) — callers load CL=sector|cyl-hi, CH=cyl-lo
+ *       into CX before jumping here.  CX is immediately reused as the retry
+ *       counter (MOVW $3,%cx), so CHS is saved to DI first.  Before each read
+ *       call CX is temporarily swapped back to CHS (PUSHW %cx / MOVW %di,%cx),
+ *       and the counter is restored from the stack after INT 13h (POPW %cx).
+ *       DI is not touched by INT 13h on XT BIOS.
  * =========================================================================*/
 do_chs_read:
-    movb    %dl, %bl                # save drive number across reset
-
+    movb    %dl, %bl                # save drive number across INT 13h reset
+    movw    %cx, %di                # save CHS — CX reused as retry counter below
     movw    $3, %cx                 # retry counter (3 attempts)
+
 .Lretry:
     movb    $0x00, %ah              # INT 13h/00h = reset
     int     $0x13
@@ -294,11 +347,14 @@ do_chs_read:
     # failure on the next instruction, caught by the retry loop.
 
     movb    %bl, %dl                # restore drive number (BIOS may corrupt)
+    pushw   %cx                     # save retry counter — CX needed for CHS
+    movw    %di, %cx                # restore CHS fields for INT 13h/02h
 
     movb    $0x02, %ah              # INT 13h/02h = read sectors
     movb    $0x01, %al
-    movw    $0x7C00, %bx
+    movw    $0x7C00, %bx            # ES:BX = read buffer (ES=0 set at startup)
     int     $0x13
+    popw    %cx                     # restore retry counter
     jnc     .Lread_ok               # success — proceed to VBR check
     loop    .Lretry                 # read failed — decrement CX, retry
     jmp     disk_error              # all 3 attempts failed
@@ -346,13 +402,13 @@ display_list:
     movw    $str_floppy_ab+RDELTA, %si  # "A Floppy\r\nB Floppy\r\n\0"
     call    print_str
 
-    movw    $0x7BBE, %si            # SI -> first partition entry
+    movw    $PTABLE, %si            # SI -> first partition entry
     movb    $'1', %bl               # starting digit
     movw    $4, %cx                 # exactly 4 entries
 
 .Lpart_loop:
-    cmpb    $0x00, 4(%si)           # type byte 0x00 = empty
-    je      .Lnext_entry
+    cmpb    $0x80, (%si)            # only show bootable (0x80) partitions;
+    jne     .Lnext_entry            # status 0x00 covers both empty and non-bootable slots
 
     movb    $0x0E, %ah
     movb    $0x00, %bh
@@ -367,7 +423,8 @@ display_list:
     pushw   %cx                     # save LOOP counter
     movb    %bl, %al
     subb    $'1', %al               # 0-based index
-    cbtw                            # AX = index (AL is 0-3; cbtw = xorb %ah,%ah here)
+    cbtw                            # zero-extend AL into AX (AL is 0-3; CBTW = XORB %AH,%AH here,
+                                    # 1 byte vs 2 — see file header note on cbw byte budget)
     movb    $4, %cl
     shlw    %cl, %ax                # AX = index * 16
     addw    $part_labels+RDELTA, %ax
@@ -377,9 +434,9 @@ display_list:
     # Recalculate SI to partition entry (%cl still 4, %cx still on stack)
     movb    %bl, %al
     subb    $'1', %al
-    cbtw                            # AX = index (cbtw saves 1 byte vs xorb %ah,%ah)
+    cbtw                            # zero-extend AL into AX (CBTW = XORB %AH,%AH, 1 byte vs 2)
     shlw    %cl, %ax                # AX = index * 16  (%cl still = 4)
-    addw    $0x7BBE, %ax
+    addw    $PTABLE, %ax
     movw    %ax, %si
     popw    %cx                     # restore LOOP counter
 
@@ -414,11 +471,11 @@ print_str:
  * the version byte 0x01 at 0x1BD.  Version encoding: high nibble = major,
  * low nibble = minor (0x01 = v0.1).
  *
- * The binary is fully packed — only 1 zero pad byte remains at 0x1B7.
+ * The binary currently has approximately 7 bytes of slack before the signature.
  *
  * .org is relative to section base (0x7C00 set by -Ttext=0x7C00).
  * =========================================================================*/
-    .org    0x1B8               # advance to signature (1 zero pad byte at 0x1B7)
+    .org    0x1B8               # advance to signature (~7 bytes slack currently)
 
 mbr_sig:
     .ascii  "mbr88"             # 5-byte signature: 6D 62 72 38 38

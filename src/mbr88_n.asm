@@ -102,6 +102,31 @@
 ;   the loop to run far past 4 entries.  We save/restore CX on the
 ;   stack (PUSH CX / POP CX) around the SHL sequences to avoid this.
 ;
+; cbw used for zero-extension (saves 1 byte vs xor ah,ah):
+;   In two places the code needs AH=0 to zero-extend AL into AX before
+;   a multiply-by-16 shift.  AL holds a partition index (always 0-3),
+;   so it is never negative and CBW (sign-extend AL into AX) produces
+;   the same result as XOR AH,AH.  CBW encodes in 1 byte vs 2 for XOR.
+;   The byte saved in wait_key was spent on the explicit MOV AH,0Eh
+;   before the '>' prompt (see below).
+;
+; AH undefined after INT 10h/0Eh:
+;   The BIOS specification leaves AH undefined on return from INT 10h/0Eh
+;   (teletype output).  Relying on AH surviving the call is fragile and
+;   breaks on some real and emulated BIOSes.  Every INT 10h call in this
+;   code is preceded by an explicit MOV AH,0Eh.  The '>' prompt after
+;   display_list therefore sets AH explicitly rather than assuming it
+;   survives from the last call inside display_list.  The 2-byte cost of
+;   MOV AH,0Eh was funded by the 1-byte cbw saving plus the last zero
+;   pad byte, leaving the binary with no slack at all.
+;
+; Stack placement:
+;   SP is initialised to 0x6000 — the base address of our relocated copy.
+;   The 8088 stack grows downward, so pushes immediately begin writing
+;   below 0x6000 into the unused region 0x5FFE, 0x5FFC, ... well away
+;   from both the IVT (0x0000) and the relocated code (0x6000-0x61FF).
+;   This gives roughly 22 KB of safe stack space.
+;
 ; Relocation delta:
 ;   ORG is 0x7C00 so every label assembles to a 0x7Cxx address.
 ;   After relocation the bytes live at 0x6000+offset.
@@ -126,7 +151,7 @@
 ;   0x040        scratch_char: display char of last selected device (1 byte)
 ;   0x041-0x080  part_labels: four 16-byte label slots, zeroed at build time
 ;   0x081-0x1B6  Boot code (instructions)
-;   0x1B7        Zero padding (1 byte — binary is fully packed)
+;   0x1B7        Zero padding (up to 7 bytes — binary has ~7 bytes of slack)
 ;   0x1B8-0x1BC  'mbr88' signature (5 bytes)
 ;   0x1BD        Version byte: high nibble = major, low nibble = minor (0x01 = v0.1)
 ;   0x1BE-0x1FD  Partition table (4 x 16-byte entries)
@@ -181,7 +206,7 @@ start:
         mov     ds, ax
         mov     es, ax
         mov     ss, ax
-        mov     sp, 6000h
+        mov     sp, 6000h               ; stack grows down from 0x6000 into free low memory
         sti
 
 ; =============================================================================
@@ -215,8 +240,10 @@ after_reloc:
         call    display_list            ; floppy lines + partition lines
 
         ; Print the ">" prompt.
-        ; AH=0Eh and BH=00h are still set from the last print_str call
-        ; inside display_list, so we only need to load AL and call INT 10h.
+        ; BH=00h is preserved across INT 10h/0Eh (page number, never modified).
+        ; AH is undefined on return from INT 10h/0Eh on some BIOSes, so set
+        ; it explicitly.  The byte cost is funded by cbw in wait_key (below).
+        mov     ah, 0Eh
         mov     al, '>'
         int     10h
 
@@ -243,23 +270,26 @@ wait_key:
         ja      wait_key
 
         sub     al, '1'                 ; '1'->0  '2'->1  '3'->2  '4'->3
-        mov     bl, al
+        mov     bl, al                  ; save index in BL — cbw below will zero AH,
+                                        ; leaving BL as the only intact copy of the index
 
-        xor     ah, ah
+        cbw                             ; zero-extend AL into AX (AL is 0-3, never negative,
+                                        ; so CBW = XOR AH,AH here but costs 1 byte instead of 2;
+                                        ; the saved byte was spent on MOV AH,0Eh for the '>' prompt)
         mov     cl, 4
         shl     ax, cl                  ; AX = index * 16
-        add     ax, 7BBEh
+        add     ax, part_table + RDELTA
         mov     si, ax
 
-        cmp     byte [si+4], 00h        ; reject empty slot
-        je      wait_key
+        cmp     byte [si], 80h          ; only accept bootable (0x80) partitions;
+        jne     wait_key                ; status 0x00 covers both empty and non-bootable slots
 
-        ; Echo chosen digit and save for error reporting
-        mov     ah, 0Eh
+        ; Save chosen digit char for error reporting (bad_vbr prints it).
+        ; No explicit echo here — bad_vbr echoes scratch_char on failure,
+        ; and on success the pre-VBR CR+LF fires cleanly without a digit.
+        ; INT 16h/00h does not echo keystrokes on PC BIOS.
         mov     al, bl
-        add     al, '1'
-        mov     bh, 00h
-        int     10h
+        add     al, '1'                 ; convert 0-based index back to digit char
         mov     [scratch_char + RDELTA], al
 
         mov     dl, 80h
@@ -279,14 +309,13 @@ boot_floppy_b:
         mov     dl, 01h
 
 do_floppy:
-        mov     ah, 0Eh
+        ; Set AL = 'A' or 'B' for scratch_char (bad_vbr prints it on failure).
+        ; No explicit echo — same reasoning as wait_key above.
         mov     al, 'A'
         cmp     dl, 01h
-        jne     .echo
+        jne     .set_scratch
         mov     al, 'B'
-.echo:
-        mov     bh, 00h
-        int     10h
+.set_scratch:
         mov     [scratch_char + RDELTA], al
 
         mov     ch, 00h
@@ -313,11 +342,21 @@ do_floppy:
 ; will produce a failed read, handled by the retry loop.  After 3 consecutive
 ; read failures we report disk_error.  This follows the convention of most
 ; XT-class MBR boot blocks.
+;
+; Register allocation inside do_chs_read:
+;   BL  drive number — saved here because INT 13h/00h reset may corrupt DL.
+;   DI  CHS fields (CX on entry) — callers load CL=sector|cyl-hi, CH=cyl-lo
+;       into CX before jumping here.  CX is immediately reused as the retry
+;       counter (MOV CX,3), so CHS is saved to DI first.  Before each read
+;       call CX is temporarily swapped back to CHS (PUSH CX / MOV CX,DI),
+;       and the counter is restored from the stack after INT 13h (POP CX).
+;       DI is not touched by INT 13h on XT BIOS.
 ; =============================================================================
 do_chs_read:
-        mov     bl, dl                  ; save drive number across reset
-
+        mov     bl, dl                  ; save drive number across INT 13h reset
+        mov     di, cx                  ; save CHS — CX reused as retry counter below
         mov     cx, 3                   ; retry counter (3 attempts)
+
 .retry:
         mov     ah, 00h                 ; INT 13h/00h = reset
         int     13h
@@ -325,11 +364,14 @@ do_chs_read:
         ; failure on the next instruction, caught by the retry loop.
 
         mov     dl, bl                  ; restore drive number (BIOS may corrupt)
+        push    cx                      ; save retry counter — CX needed for CHS
+        mov     cx, di                  ; restore CHS fields for INT 13h/02h
 
         mov     ah, 02h                 ; INT 13h/02h = read sectors
         mov     al, 01h
-        mov     bx, 7C00h
+        mov     bx, 7C00h               ; ES:BX = read buffer (ES=0 set at startup)
         int     13h
+        pop     cx                      ; restore retry counter
         jnc     .read_ok                ; success — proceed to VBR check
         loop    .retry                  ; read failed — decrement CX, retry
         jmp     disk_error              ; all 3 attempts failed
@@ -386,13 +428,13 @@ display_list:
         call    print_str
 
         ; Partition lines
-        mov     si, 7BBEh               ; SI -> first partition entry
+        mov     si, part_table + RDELTA ; SI -> first partition entry
         mov     bl, '1'                 ; starting digit
         mov     cx, 4                   ; exactly 4 entries
 
 .part_loop:
-        cmp     byte [si+4], 00h        ; type byte 00h = empty slot
-        je      .next
+        cmp     byte [si], 80h          ; only show bootable (0x80) partitions;
+        jne     .next                   ; status 0x00 covers both empty and non-bootable slots
 
         ; Print digit
         mov     ah, 0Eh
@@ -409,7 +451,8 @@ display_list:
         push    cx                      ; save LOOP counter — MOV CL,4 clobbers CX
         mov     al, bl
         sub     al, '1'                 ; 0-based index
-        cbw                             ; AX = index (AL is 0-3, cbw = xor ah,ah here)
+        cbw                             ; zero-extend AL into AX (AL is 0-3; CBW = XOR AH,AH here,
+                                        ; 1 byte vs 2 — see file header note on cbw byte budget)
         mov     cl, 4
         shl     ax, cl                  ; AX = index * 16
         add     ax, part_labels + RDELTA
@@ -419,9 +462,9 @@ display_list:
         ; Recalculate SI to current partition entry (CL still 4, CX still pushed)
         mov     al, bl
         sub     al, '1'
-        cbw                             ; AX = index (cbw saves 1 byte vs xor ah,ah)
+        cbw                             ; zero-extend AL into AX (CBW = XOR AH,AH, 1 byte vs 2)
         shl     ax, cl                  ; AX = index * 16  (CL still = 4)
-        add     ax, 7BBEh
+        add     ax, part_table + RDELTA
         mov     si, ax
         pop     cx                      ; restore LOOP counter
 
@@ -462,7 +505,7 @@ print_str:
 ;
 ; Magic numbers are identified by position and length, not null termination.
 ; =============================================================================
-        times   1B8h - ($ - $$)  db 0  ; pad to signature (1 zero byte — fully packed)
+        times   1B8h - ($ - $$)  db 0  ; pad to signature (~7 bytes slack currently)
 
 mbr_sig:
         db      'mbr88'                 ; 5-byte signature: 6D 62 72 38 38

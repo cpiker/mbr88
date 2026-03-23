@@ -38,7 +38,7 @@ freedos: $(BD) $(BD)/mbr88_n.bin $(BD)/mk_head $(BD)/mbr88.h $(BD)/mbrpatch.com
 # and GAS are identical.  Requireds the ELKS environment or
 # some other source of ia16-elf-as & ia16-elf-ld 
 check_equal:$(BN)/mbr88_n.bin $(BE)/mbr88_g.bin
-	N=$$(md5sum $(BN)/mbr88_n.bin) && G=$$(md5sum $(BN)/mbr88_g.bin) && [ "$$N" -e "$$G"]
+	N=$$(md5sum $(BN)/mbr88_n.bin | awk '{print $$1}') && G=$$(md5sum $(BE)/mbr88_g.bin | awk '{print $$1}') && [ "$$N" = "$$G" ]
 
 
 # Native builds ##############################################################
@@ -63,21 +63,20 @@ $(BN)/mbrpatch:src/mbrpatch.c $(BN)/mbr88.h
 $(BE):
 	@if [ ! -e "$@" ]; then mkdir -p $@; fi
 
-$(BE)/mbr88_g.o:src/mbr88_g.asm
+$(BE)/mbr88_g.o:src/mbr88_g.s
 	ia16-elf-as -o $@ $<
 
 $(BE)/mbr88_g.bin:$(BE)/mbr88_g.o
 	ia16-elf-ld -Ttext=0x7C00 --oformat=binary -o $@ $<
 
+# This is built native since it's an intermediary file
 $(BE)/mk_head:src/mk_head.c
-	ia16-elf-gcc -melks -Os $< -o $@
+	gcc -Wall $< -o $@
 
 $(BE)/mbr88.h:$(BE)/mk_head $(BE)/mbr88_g.bin
-	./$(BE)/mk_head $(BE)/mbr88_g.bin $(BE)/mbr88.h
+	./$< $(BE)/mbr88_g.bin $(BE)/mbr88.h
 
-# This step only works if you're actually on elks, since we have to 
-# run a native program.
-$(BE)/mbrpatch:src/mbrpatch.c $(BN)/mbr88.h
+$(BE)/mbrpatch:src/mbrpatch.c $(BE)/mbr88.h
 	ia16-elf-gcc -I $(BE) -melks -Os $< -o $@
 
 
@@ -101,7 +100,7 @@ $(BD)/mbrpatch:src/mbrpatch.c $(BD)/mbr88.h
 
 # Helpers ####################################################################
 clean:
-	-rm build/*.o 
+	-rm build/*/*.o build/*/mk_head build/*/mbr88.h
 
 distclean:
 	-rm -r build
