@@ -1,17 +1,6 @@
-/*
- * mbr_patch.c — Interactive IBM XT-style MBR partition table editor
- *
- * Written by Claude (Anthropic) and verified by Chris Piker.
- *
- * Purpose:
- *   Created to support dual booting FreeDOS and ELKS Linux on IBM XT class
- *   hardware alongside the mbr88_nasm.asm / mbr88_gas.s boot records.
- *   Equivalent to mbr_patch.py but written in C99 for use on ELKS Linux
- *   and other environments without a Python interpreter.
- *
- * License:
- *   MIT License
- *   Copyright (c) 2025 Chris Piker
+/* mbrpatch.c — Interactive IBM XT-style MBR partition table editor */
+
+/* MIT License — Copyright (c) 2026 Chris Piker
  *
  *   Permission is hereby granted, free of charge, to any person obtaining
  *   a copy of this software and associated documentation files (the
@@ -32,20 +21,28 @@
  *   ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  *   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  *   SOFTWARE.
+ */
+
+/* AI Disclosure:
+ *   This code was generated with Claude, which is an Artifical Intelligence
+ *   service provided by Anthropic. Though the design and development was
+ *   orchastrated by a human, and the outputs were verified on real vintage
+ *   hardware, most of the actual code was composed by an AI.
  *
- * AI disclosure:
- *   This code was generated with Anthropic Claude, which is an AI.  It is
- *   quite understandable that AI generated code may not be suitable for
- *   some projects.  If you prefer not to depend on AI generated (though
- *   human verified) code in your open source project, please do not
- *   include this file.
- *
- * Acknowledgements:
+ *   It's completely understandable that AI generated software may not be
+ *   suitable for some projects. Please check the contribution guidelines of
+ *   any projects you participate in. If the project has a rule against AI
+ *   generate software then DO NOT INCLUDE THIS FILE or it's contents in your
+ *   patches or pull requests!
+ */
+
+/* Acknowledgements:
  *   Thanks to osdev.org for the reference material and community insights
  *   that informed the design of the mbr88 boot records this tool supports.
  *   https://wiki.osdev.org/MBR_(x86)
- *
- * Build (native Linux / development):
+ */
+
+/* Build (native Linux / development):
  *   gcc -std=c99 -Wall -o mbr_patch_native mbr_patch.c
  *
  * Build (cross-compile for ELKS, ia16-elf-gcc):
@@ -95,7 +92,7 @@
  * mbr88 blank template — included from generated header
  * -----------------------------------------------------------------------*/
 
-#include "mbr88_template.h"
+#include "mbr88.h"
 
 /* Catch any future mismatch between size constants at compile time */
 typedef char mbr_size_check_[
@@ -112,9 +109,7 @@ typedef char mbr_size_check_[
 #define NUM_ENTRIES       4
 #define BOOTSIG_OFFSET    0x1FE
 
-#define LABEL_BASE        0x43
-#define LABEL_SLOT_SZ     16
-#define LABEL_MAX         11
+/* MBR88_LABEL_BASE, MBR88_LABEL_SLOT_SZ, MBR88_LABEL_MAX come from mbr88.h */
 
 /* Two-column display geometry — 38 + 4 + 38 = 80 */
 #define COL_WIDTH         38
@@ -202,24 +197,24 @@ static unsigned long chs_to_lba(int cyl, int head, int sector)
  * Label slot helpers
  * -----------------------------------------------------------------------*/
 
-static void build_label_slot(unsigned char slot[LABEL_SLOT_SZ],
+static void build_label_slot(unsigned char slot[MBR88_LABEL_SLOT_SZ],
                               const char *text)
 {
     int len = (int)strlen(text);
-    if (len > LABEL_MAX) len = LABEL_MAX;
-    memset(slot, 0, LABEL_SLOT_SZ);
+    if (len > MBR88_LABEL_MAX) len = MBR88_LABEL_MAX;
+    memset(slot, 0, MBR88_LABEL_SLOT_SZ);
     memcpy(slot, text, len);
     slot[len]   = '\r';
     slot[len+1] = '\n';
     slot[len+2] = '\0';
 }
 
-static void read_label(int slot_0based, char buf[LABEL_MAX + 1])
+static void read_label(int slot_0based, char buf[MBR88_LABEL_MAX + 1])
 {
-    int off = LABEL_BASE + slot_0based * LABEL_SLOT_SZ;
+    int off = MBR88_LABEL_BASE + slot_0based * MBR88_LABEL_SLOT_SZ;
     int len;
-    memcpy(buf, mbr + off, LABEL_MAX);
-    buf[LABEL_MAX] = '\0';
+    memcpy(buf, mbr + off, MBR88_LABEL_MAX);
+    buf[MBR88_LABEL_MAX] = '\0';
     len = (int)strlen(buf);
     while (len > 0 && (buf[len-1] == ' '  || buf[len-1] == '\t' ||
                        buf[len-1] == '\r' || buf[len-1] == '\n'))
@@ -228,9 +223,13 @@ static void read_label(int slot_0based, char buf[LABEL_MAX + 1])
 
 static void write_label(int slot_0based, const char *text)
 {
-    unsigned char slot[LABEL_SLOT_SZ];
+    unsigned char slot[MBR88_LABEL_SLOT_SZ];
     build_label_slot(slot, text);
-    memcpy(mbr + LABEL_BASE + slot_0based * LABEL_SLOT_SZ, slot, LABEL_SLOT_SZ);
+    memcpy(
+        mbr + MBR88_LABEL_BASE + slot_0based * MBR88_LABEL_SLOT_SZ, 
+        slot, 
+        MBR88_LABEL_SLOT_SZ
+    );
 }
 
 /* -------------------------------------------------------------------------
@@ -407,7 +406,7 @@ static void col_lines(int slot_1based, char lines[7][COL_WIDTH + 1])
         int cyl_e, head_e, sec_e;
         unsigned long lba_size;
         char size_buf[24];
-        char label_buf[LABEL_MAX + 1];
+        char label_buf[MBR88_LABEL_MAX + 1];
         const char *tname    = type_name(part_type);
         const char *boot_tag = (status == 0x80) ? "Boot" : "    ";
 
@@ -621,7 +620,11 @@ static void cmd_delete(void)
     memset(mbr + off, 0, ENTRY_SIZE);
 
     if (has_mbr88_sig)
-        memset(mbr + LABEL_BASE + (slot-1) * LABEL_SLOT_SZ, 0, LABEL_SLOT_SZ);
+        memset(
+           mbr + MBR88_LABEL_BASE + (slot-1) * MBR88_LABEL_SLOT_SZ,
+           0, 
+           MBR88_LABEL_SLOT_SZ
+        );
 
     dirty = 1;
     printf("  Partition %d deleted.\n", slot);
@@ -676,8 +679,8 @@ static void cmd_bootable(void)
 static void cmd_label(void)
 {
     int  slot;
-    char label_buf[LABEL_MAX + 2];
-    char current[LABEL_MAX + 1];
+    char label_buf[MBR88_LABEL_MAX + 2];
+    char current[MBR88_LABEL_MAX + 1];
 
     if (!has_mbr88_sig) {
         printf("  Labels are only supported on mbr88 images.\n");
@@ -697,11 +700,11 @@ static void cmd_label(void)
     printf("  Current label: '%s'\n", current);
 
     for (;;) {
-        printf("  New label (up to %d chars): ", LABEL_MAX);
+        printf("  New label (up to %d chars): ", MBR88_LABEL_MAX);
         fflush(stdout);
         if (!read_line(label_buf, sizeof(label_buf))) exit(1);
-        if ((int)strlen(label_buf) <= LABEL_MAX) break;
-        printf("  Label too long — maximum %d characters.\n", LABEL_MAX);
+        if ((int)strlen(label_buf) <= MBR88_LABEL_MAX) break;
+        printf("  Label too long — maximum %d characters.\n", MBR88_LABEL_MAX);
     }
 
     if (label_buf[0] == '\0') {
@@ -842,7 +845,7 @@ static void print_help(void)
     puts("  w  Write to disk            q  Quit");
     puts("");
     puts("mbr88 label editing:");
-    puts("  Labels are stored in the MBR at offset 0x43 and displayed in the");
+    puts("  Labels are stored in the MBR at offset 0x41 and displayed in the");
     puts("  boot menu next to the partition number.  They are only supported");
     puts("  for mbr88 v0.1 images.  If a newer mbr88 version is detected,");
     puts("  get an updated mbr_patch from: https://github.com/cpiker/mbr88");

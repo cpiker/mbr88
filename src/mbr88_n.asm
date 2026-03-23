@@ -118,9 +118,14 @@
 ;   standard workaround used in MBR and bootloader code.
 ;
 ; Binary layout (512 bytes):
-;   0x000-0x042  Code + data (jmp, strings, scratch_char)
-;   0x043-0x082  part_labels (four 16-byte label slots, zeroed at build time)
-;   0x083-0x1B6  Boot code (instructions)
+;   0x000-0x002  Near jump over data area (E9 xx xx)
+;   0x003-0x00A  str_boot_from: "Boot:\r\n\0" (8 bytes)
+;   0x00B-0x01F  str_floppy_ab: "A Floppy\r\nB Floppy\r\n\0" (21 bytes)
+;   0x020-0x02C  str_disk_err: "Read error\r\n\0" (13 bytes)
+;   0x02D-0x03F  str_no_boot: ": No boot record\r\n\0" (19 bytes)
+;   0x040        scratch_char: display char of last selected device (1 byte)
+;   0x041-0x080  part_labels: four 16-byte label slots, zeroed at build time
+;   0x081-0x1B6  Boot code (instructions)
 ;   0x1B7        Zero padding (1 byte — binary is fully packed)
 ;   0x1B8-0x1BC  'mbr88' signature (5 bytes)
 ;   0x1BD        Version byte: high nibble = major, low nibble = minor (0x01 = v0.1)
@@ -144,7 +149,7 @@ str_boot_from:
 
 str_floppy_ab:
         db      'A Floppy', 0Dh, 0Ah   ; "A Floppy\r\n"
-        db      'B Floppy', 0Dh, 0Ah, 0 ; "B Floppy\r\n\0"  22 bytes total
+        db      'B Floppy', 0Dh, 0Ah, 0 ; "B Floppy\r\n\0"  21 bytes total
 
 str_disk_err:
         db      'Read error', 0Dh, 0Ah, 0  ; 13 bytes

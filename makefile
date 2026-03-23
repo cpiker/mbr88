@@ -1,4 +1,5 @@
 # A make file for MBR88, a multi-boot MBR record and MBR editor.
+# This makefile presumes cross compilation
 #
 # 1. To generate native Linux MBR patching tools just run:
 #
@@ -23,54 +24,82 @@
 
 .PHONY: all native elks freedos
 
-# Here's a build for native systems with nasm & gcc
-native:build \
- build/mbr88_nasm.bin \
- build/mbr88_tplt.h \
- build/mbr_patch_native \
+BN:=build/native
+BE:=build/elks
+BD:=build/freedos
 
-# Build the tools for an elks target
-elks:build \
- build/mbr88_tplt.h \
- build/mbr_patch
+native: $(BN) $(BN)/mbr88_n.bin $(BN)/mk_head $(BN)/mbr88.h $(BN)/mbrpatch
 
-# Build for a freedos target, asperational at this point
-freedos:build \
- build/mbr88_tplt.h \
- build/mbr_patch.exe 
+elks: $(BE) $(BE)/mbr88_g.bin $(BE)/mk_head $(BE)/mbr88.h $(BE)/mbrpatch
+
+freedos: $(BD) $(BD)/mbr88_n.bin $(BD)/mk_head $(BD)/mbr88.h $(BD)/mbrpatch.com
+
+# Used to insure the template MBR binaries emitted by NASM
+# and GAS are identical.  Requireds the ELKS environment or
+# some other source of ia16-elf-as & ia16-elf-ld 
+check_equal:$(BN)/mbr88_n.bin $(BE)/mbr88_g.bin
+	N=$$(md5sum $(BN)/mbr88_n.bin) && G=$$(md5sum $(BN)/mbr88_g.bin) && [ "$$N" -e "$$G"]
 
 
-# Check everything, and insure gas and nasm versions are
-# give identical output
-all: build_mbr88_gas.bin native elks freedos
+# Native builds ##############################################################
+$(BN):
+	@if [ ! -e "$@" ]; then mkdir -p $@; fi
 
-build: 
-	@if [ ! -e "$(BD)" ]; then mkdir build; fi
-
-build/mbr88_nasm.bin:src/mbr88_nasm.asm
+$(BN)/mbr88_n.bin:src/mbr88_n.asm
 	nasm -f bin $< -o $@
 
-build/mbr88_gas.bin:build/mbr88_gas.o
-	ia16-elf-ld -Ttext=0x7C00 --oformat=binary -o $@ $<
+$(BN)/mk_head:src/mk_head.c
+	gcc -Wall $< -o $@ 
 
+$(BN)/mbr88.h:$(BN)/mk_head $(BN)/mbr88_n.bin
+	./$(BN)/mk_head $(BN)/mbr88_n.bin $(BN)/mbr88.h
 
-# Assume the template is only regenerated on an native system
-# otherwise the one checked into git is fine.
-build/mbr88_tplt.h:build/mbr88_nasm.bin
-	gcc -std=c99 -Wall -o mbr88_tplt
-	build/mbr88_tplt $< $@
-	
-		
-build/mbr88_gas.o:src/mbr88_gas.s
+# Strip is optional, just trying to save space on disk
+$(BN)/mbrpatch:src/mbrpatch.c $(BN)/mbr88.h
+	gcc -Wall -I $(BN) $< -o $@
+	strip $@  
+
+# ELKS Cross-compile #########################################################
+$(BE):
+	@if [ ! -e "$@" ]; then mkdir -p $@; fi
+
+$(BE)/mbr88_g.o:src/mbr88_g.asm
 	ia16-elf-as -o $@ $<
 
+$(BE)/mbr88_g.bin:$(BE)/mbr88_g.o
+	ia16-elf-ld -Ttext=0x7C00 --oformat=binary -o $@ $<
 
-build/mbr_patch:src/mbr_patch.c
-	ia16-elf-gcc -melks -Os -o $@ $<
+$(BE)/mk_head:src/mk_head.c
+	ia16-elf-gcc -melks -Os $< -o $@
 
-build/mbr_patch_native:src/mbr_patch.c
-	gcc -std=c99 -Wall -o $@ $<
+$(BE)/mbr88.h:$(BE)/mk_head $(BE)/mbr88_g.bin
+	./$(BE)/mk_head $(BE)/mbr88_g.bin $(BE)/mbr88.h
 
+# This step only works if you're actually on elks, since we have to 
+# run a native program.
+$(BE)/mbrpatch:src/mbrpatch.c $(BN)/mbr88.h
+	ia16-elf-gcc -I $(BE) -melks -Os $< -o $@
+
+
+# FreeDOS cross-compile ######################################################
+# (work needed here)
+
+$(BD):
+	@if [ ! -e "$@" ]; then mkdir -p $@; fi
+
+$(BD)/mbr88_n.bin:src/mbr88_n.asm
+	nasm -f bin $< -o $@
+
+$(BD)/mk_head:src/mk_head.c
+	wcl $< -o $@ 
+
+$(BD)/mbr88.h:$(BD)/mk_head $(BD)/mbr88_n.bin
+	./$(BD)/mk_head $(BD)/mbr88_n.bin $(BD)/mbr88.h
+
+$(BD)/mbrpatch:src/mbrpatch.c $(BD)/mbr88.h
+	wcl -I$(BD) $< -o $@ 
+
+# Helpers ####################################################################
 clean:
 	-rm build/*.o 
 
