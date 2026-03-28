@@ -23,3 +23,7 @@ Written by Claude Code under heavy interrogation by C. Piker.  Verified on
 a Leading Edge Model D with two floppy drives and a four partition hard
 disk with both ELKS Linux and FreeDos installed.  More hardware verification
 in the works.
+
+##Acknowledgements
+Thanks to osdev.org for the reference material and insights that informed the
+design of this boot record, especially thecreators of [this page](https://wiki.osdev.org/MBR_(x86)).
