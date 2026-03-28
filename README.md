@@ -1,6 +1,7 @@
 # mbr88
 An OS independent 8088 op-code clean MBR for dual booting ELKS, FreeDOS or other
-OS up through Windows 98.
+OS up through Windows 98.  Currently cross compiles for ELKS.  FreeDOS via
+OpenWatcom is in the works.
 
 *Don't use this yet.  Currently adding support for Windows NT and OS/2 disk
 signatures.*
