@@ -1,11 +1,11 @@
 .\" mbrpatch.8 - Manual page for mbrpatch
 .\" Part of the mbr88 project: https://github.com/cpiker/mbr88
-.\" MIT License - Copyright (c) 2025 Chris Piker
+.\" MIT License - Copyright (c) 2026 Chris Piker
 .\"
 .\" Install: cp mbrpatch.8 /usr/share/man/man8/
 .\"          gzip /usr/share/man/man8/mbrpatch.8
 .\"
-.TH MBRPATCH 8 "2025" "mbr88 v0.1" "System Administration"
+.TH MBRPATCH 8 "2026" "mbr88 v0.2" "System Administration"
 .\"
 .\" -------------------------------------------------------------------------
 .SH NAME
@@ -45,7 +45,7 @@ reads, displays, and interactively edits the 512-byte Master Boot Record
 of an IBM XT-class hard disk image.
 It understands the standard four-entry MBR partition table and
 the extended boot menu label feature of the
-.B mbr88
+.B MBR88 v0.2
 boot record.
 .PP
 It can also read the MBR directly from a physical disk device or write
@@ -83,15 +83,15 @@ This mode never modifies the file.
 Validates the file then enters an interactive command session.
 Partition table entries can be edited, deleted, and redefined.
 If the
-.B mbr88
+.B MBR88
 signature is present and the version is exactly
-.BR v0.1 ,
+.BR v0.2 ,
 boot menu label editing is also available.
 .TP
 .B mbrpatch \-u \fImbr_file\fR
 .B "Upgrade mode."
 Validates the file, replaces its boot code with the
-.B mbr88 v0.1
+.B MBR88 v0.2
 boot record, and preserves the existing partition table entries.
 The file must already exist; use
 .B \-n
@@ -100,7 +100,7 @@ to create a new image from scratch.
 .B mbrpatch \-n \fImbr_file\fR
 .B "New mode."
 Creates a blank
-.B mbr88 v0.1
+.B MBR88 v0.2
 image and enters the interactive command session.
 The target file must
 .I not
@@ -177,8 +177,8 @@ l l .
 \fBd\fR	Delete a partition slot.  Zeros the 16-byte entry and its label.
 \fBt\fR	Change the partition type byte of an existing entry.
 \fBb\fR	Toggle the bootable flag (inactive / bootable).
-	See NOTES for mbr88 behaviour regarding this flag.
-\fBv\fR	Set the boot menu volume label for a partition (mbr88 v0.1 only).
+	See NOTES for MBR88 behaviour regarding this flag.
+\fBv\fR	Set the boot menu volume label for a partition (MBR88 v0.2 only).
 	Up to 11 characters, displayed in the boot menu.
 \fBp\fR	Print the current state of the partition table.
 \fBl\fR	List common partition type codes.
@@ -210,7 +210,7 @@ Bytes 12\-15	LBA sector count (32-bit little-endian, computed from CHS)
 .\" -------------------------------------------------------------------------
 .SH MBR88 FEATURES
 .\"
-.B mbr88
+.B MBR88
 is a custom MBR boot record for IBM XT-class hardware that presents an
 interactive boot menu and always waits for the user to choose what to boot.
 It supports hard disk partitions 1 through 4 and floppy drives A and B.
@@ -246,10 +246,10 @@ followed by a version byte at
 Version
 .B 0x01
 corresponds to
-.BR v0.1 .
+.BR v0.2 .
 .PP
 When an
-.B mbr88 v0.1
+.B mbr88 v0.2
 image is loaded, four 16-byte label slots at offset
 .B 0x41
 become editable via the
@@ -426,9 +426,9 @@ or that CHS end values are greater than CHS start values.
 .\" -------------------------------------------------------------------------
 .SH AUTHOR
 .\"
-Written by Claude (Anthropic) and verified by Chris Piker.
+Written by Chris Piker with the assistance of Claude (Anthropic)
 .PP
 Part of the
 .B mbr88
 project.
-MIT License \(em Copyright (c) 2025 Chris Piker.
+MIT License \(em Copyright (c) 2026 Chris Piker.

@@ -24,21 +24,21 @@
  */
 
 /* AI Disclosure:
- *   This code was generated with Claude, which is an Artificial Intelligence
- *   service provided by Anthropic. Though design and development was
- *   orchestrated by a human, reviewed by a human and tested by a human,
- *   most of the actual code was composed by an AI.
+ *   This code was generated in cooperation with Claude, which is an 
+ *   Artificial Intelligence service provided by Anthropic. Though 
+ *   development was orchestrated by a human, reviewed by a human, and 
+ *   tested by a human, the majority of the code was composed by an AI.
  *
  *   It is completely reasonable to forbid AI generated software in some
- *   contexts.  Please check the contribution guidelines of any projects you
- *   participate in. If the project has a rule against AI generated software
- *   then DO NOT INCLUDE THIS FILE, in whole or in part, in your patches
- *   or pull requests!
+ *   contexts.  Please check the contribution guidelines of any projects
+ *   you participate in. If the project has a rule against AI generated
+ *   software then DO NOT INCLUDE THIS FILE, in whole or in part, in your
+ *   patches or pull requests!
  */
 
 /* Acknowledgements:
  *   Thanks to osdev.org for the reference material and community insights
- *   that informed the design of the mbr88 boot records this tool supports.
+ *   that informed the design of the MBR88 boot records this tool provides.
  *   https://wiki.osdev.org/MBR_(x86)
  */
 
@@ -52,7 +52,7 @@
  *   wcl -ms mbrpatch.c -o mbrpatch.exe
  *
  * Disk I/O (-r / -w modes):
- *   Linux / ELKS: the disk device is a path (/dev/sda, /dev/hda, /dev/cda
+ *   Linux / ELKS: the disk device is a path (/dev/hda, /dev/cda
  *     etc.) opened with open()/read()/write() -- same as any file.
  *     Writing sector 0 requires root permissions on Linux/ELKS.
  *   FreeDOS (Open Watcom): no device-file namespace exists.  The disk is
@@ -76,9 +76,9 @@
  *   Bytes 12-15  LBA size  (32-bit little-endian)
  */
 
-/* -------------------------------------------------------------------------
- * Portability: POSIX (gcc/ia16-elf-gcc) vs Open Watcom
- * -----------------------------------------------------------------------*/
+/* ***************************************************************************
+ * Portability: POSIX (gcc & ia16-elf-gcc) vs Open Watcom
+ */
 #ifdef __WATCOMC__
 #	include <io.h>
 #	include <fcntl.h>
@@ -99,9 +99,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * mbr88 blank template -- included from generated header
- * -----------------------------------------------------------------------*/
+ */
 
 #include "mbr88.h"
 
@@ -110,9 +110,9 @@ typedef char mbr_size_check_[
 	(MBR88_TEMPLATE_SIZE == 512) ? 1 : -1
 ];
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * Constants
- * -----------------------------------------------------------------------*/
+ */
 
 #define MBR_SIZE          512
 #define PTABLE_OFFSET     0x1BE
@@ -130,9 +130,9 @@ typedef char mbr_size_check_[
 #define DEFAULT_HEADS     16
 #define DEFAULT_SECTORS   17
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * Session state globals
- * -----------------------------------------------------------------------*/
+ */
 
 static unsigned char mbr[MBR_SIZE];
 static char          mbr_path[256];
@@ -142,9 +142,9 @@ static int           dirty;
 static int           geo_heads;
 static int           geo_sectors;
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * Partition type table
- * -----------------------------------------------------------------------*/
+ */
 
 typedef struct { unsigned char type; const char *name; } TypeName;
 
@@ -213,9 +213,9 @@ static void print_type_hints(void)
 	}
 }
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * CHS helpers
- * -----------------------------------------------------------------------*/
+ */
 
 static void pack_chs(unsigned char out[3], int cyl, int head, int sector)
 {
@@ -238,9 +238,9 @@ static unsigned long chs_to_lba(int cyl, int head, int sector)
 		* geo_sectors + (sector - 1);
 }
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * Label slot helpers
- * -----------------------------------------------------------------------*/
+ */
 
 static void build_label_slot(unsigned char slot[MBR88_LABEL_SLOT_SZ],
 	const char *text)
@@ -277,9 +277,9 @@ static void write_label(int slot_0based, const char *text)
 	);
 }
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * mbr88 detection and upgrade
- * -----------------------------------------------------------------------*/
+ */
 
 static int detect_mbr88(void)
 {
@@ -297,12 +297,12 @@ static unsigned char mbr88_version(void)
 }
 
 /* Return 1 if label editing is supported for the loaded MBR.
- * Label slot format is only understood for mbr88 v0.1 exactly.
- * Any other version (including future ones) is unsupported; the
- * caller should direct the user to get a newer mbrpatch. */
+ * Label slot format is only understood for the mbr88 version
+ * MBR88_VER_BYTE. Future ones are not unsupported; the caller
+ * should direct the user to get a newer mbrpatch. */
 static int labels_supported(void)
 {
-	return detect_mbr88() && (mbr88_version() == 0x01);
+	return detect_mbr88() && (mbr88_version() == MBR88_VER_BYTE);
 }
 
 static void upgrade_to_mbr88(void)
@@ -313,9 +313,9 @@ static void upgrade_to_mbr88(void)
 	memcpy(mbr + PTABLE_OFFSET, old_ptable, 64);
 }
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * File I/O
- * -----------------------------------------------------------------------*/
+ */
 
 static int copy_file(const char *src, const char *dst)
 {
@@ -333,9 +333,9 @@ static int copy_file(const char *src, const char *dst)
 	return result;
 }
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * Input helpers
- * -----------------------------------------------------------------------*/
+ */
 
 static int read_line(char *buf, int len)
 {
@@ -402,9 +402,9 @@ static int ask_slot(const char *prompt)
 	return -1;
 }
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * Two-column display helpers
- * -----------------------------------------------------------------------*/
+ */
 
 static int is_empty(int slot_0based)
 {
@@ -563,9 +563,9 @@ static void print_table(void)
 	}
 }
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * Command implementations
- * -----------------------------------------------------------------------*/
+ */
 
 static void cmd_geometry(void)
 {
@@ -841,9 +841,9 @@ static void cmd_help(void)
 	putchar('\n');
 }
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * Help text -- full version for native builds, minimal for target builds
- * -----------------------------------------------------------------------*/
+ */
 
 #if defined(__ia16__) || defined(__WATCOMC__)
 
@@ -868,7 +868,7 @@ static void print_help(void)
 
 static void print_help(void)
 {
-	puts("mbrpatch -- IBM XT-style MBR partition table viewer and editor");
+	puts("mbrpatch -- DOS and compatable MBR partition table viewer and editor");
 	puts("");
 	puts("Usage:");
 	puts("  mbrpatch        <mbr_file>               View partition table and exit");
@@ -886,15 +886,15 @@ static void print_help(void)
 	puts("");
 	puts("  -p         Patch.  Interactively edit the partition table of an");
 	puts("             existing MBR file.  Label editing is enabled only for");
-	puts("             mbr88 v0.1 images.  Other mbr88 versions show a message");
+	puts("             mbr88 v" MBR88_VER_STR " images.  Other mbr88 versions show a message");
 	puts("             directing you to get a newer mbrpatch.");
 	puts("");
 	puts("  -u         Upgrade.  Replace the boot code of an existing MBR with");
-	puts("             the mbr88 v0.1 boot record, preserving the partition");
+	puts("             the mbr88 v" MBR88_VER_STR " boot record, preserving the partition");
 	puts("             table entries.  The file must exist and be valid.  Label");
 	puts("             editing is always available after upgrade.");
 	puts("");
-	puts("  -n         New.  Create a blank mbr88 v0.1 image from scratch.");
+	puts("  -n         New.  Create a blank mbr88 v" MBR88_VER_STR " image from scratch.");
 	puts("             The target file must NOT exist (safety check).  Enters");
 	puts("             the same interactive session as -p with labels enabled.");
 	puts("");
@@ -919,37 +919,37 @@ static void print_help(void)
 	puts("  p  Print table              l  List type codes");
 	puts("  w  Write to file            q  Quit");
 	puts("");
-	puts("mbr88 bootable flag:");
+	puts("MBR88 bootable flag:");
 	puts("  mbr88 only shows bootable partitions in the boot menu.");
-	puts("  Unlike most MBR loaders, mbr88 allows multiple partitions to be");
+	puts("  Unlike most MBR loaders, MBR88 allows multiple partitions to be");
 	puts("  bootable at once -- all will appear in the menu.");
 	puts("  Use the 'b' command to toggle the flag on each partition.");
 	puts("");
-	puts("mbr88 label editing:");
+	puts("MBR88 label editing:");
 	puts("  Labels are stored in the MBR at offset 0x41 and displayed in the");
 	puts("  boot menu next to the partition number.  They are only supported");
-	puts("  for mbr88 v0.1 images.  If a newer mbr88 version is detected,");
-	puts("  get an updated mbrpatch from: https://github.com/cpiker/mbr88");
+	puts("  for mbr88 v" MBR88_VER_STR " images.  If a newer mbr88 version is detected, you'll");
+	puts("  need to get an updated mbrpatch from: https://github.com/cpiker/mbr88");
 	puts("");
 	puts("Examples:");
 	puts("  mbrpatch mbr.bin                    view current partition table");
-	puts("  mbrpatch -r backup.bin /dev/sda     read live MBR to file (Linux)");
+	puts("  mbrpatch -r backup.bin /dev/hda     read live MBR to file (Linux)");
 	puts("  mbrpatch -r backup.bin 80h          read live MBR to file (FreeDOS)");
-	puts("  mbrpatch -u mbr.bin                 upgrade to mbr88, then edit");
-	puts("  mbrpatch -w mbr.bin /dev/sda        write MBR to disk (Linux)");
+	puts("  mbrpatch -u mbr.bin                 upgrade to MBR88, then edit");
+	puts("  mbrpatch -w mbr.bin /dev/hda        write MBR to disk (Linux)");
 	puts("  mbrpatch -w mbr.bin 80h             write MBR to disk (FreeDOS)");
-	puts("  mbrpatch -n new.bin                 create a fresh mbr88 image");
+	puts("  mbrpatch -n new.bin                 create a fresh MBR88 image");
 }
 
 #endif /* __ia16__ || __WATCOMC__ */
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * Disk I/O -- read or write the first sector of a physical disk.
  *
  * On Linux / ELKS the caller passes a device path string (/dev/sda etc.).
  * On FreeDOS (Open Watcom) the caller passes a BIOS drive number string
  * such as "80h", "0x80", or "128" -- all meaning the first hard disk.
- * -----------------------------------------------------------------------*/
+ */
 
 #ifdef __WATCOMC__
 
@@ -1107,9 +1107,9 @@ static int load_and_validate(void)
 	return 0;
 }
 
-/* -------------------------------------------------------------------------
+/* ***************************************************************************
  * Main
- * -----------------------------------------------------------------------*/
+ */
 
 int main(int argc, char *argv[])
 {
@@ -1189,9 +1189,9 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	/* ------------------------------------------------------------------ */
-	/* Mode -r: read first sector from disk, validate, display, save      */
-	/* ------------------------------------------------------------------ */
+	/* ******************************************************************
+	 * Mode -r: read first sector from disk, validate, display, save
+	 */
 	if (mode_read) {
 		int fd2, n2;
 
@@ -1230,9 +1230,9 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 
-	/* ------------------------------------------------------------------ */
-	/* Mode -w: load file, display it, confirm, write to disk             */
-	/* ------------------------------------------------------------------ */
+	/* ******************************************************************
+	 * Mode -w: load file, display it, confirm, write to disk
+	 */
 	if (mode_write) {
 		if (load_and_validate() != 0)
 			return 1;
@@ -1260,9 +1260,9 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 
-	/* ------------------------------------------------------------------ */
-	/* Mode: view -- read, validate, print, exit                          */
-	/* ------------------------------------------------------------------ */
+	/* ******************************************************************
+	 * Mode: view -- read, validate, print, exit
+	 */
 	if (mode_view) {
 		if (load_and_validate() != 0)
 			return 1;
@@ -1277,9 +1277,9 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 
-	/* ------------------------------------------------------------------ */
-	/* Mode: new -- file must NOT exist                                    */
-	/* ------------------------------------------------------------------ */
+	/* ******************************************************************
+	 * Mode: new -- file must NOT exist
+	 */
 	if (mode_new) {
 		fd = open(mbr_path, O_RDONLY);
 		if (fd >= 0) {
@@ -1293,15 +1293,15 @@ int main(int argc, char *argv[])
 		memcpy(mbr, MBR88_TEMPLATE, MBR_SIZE);
 		has_mbr88_sig = 1;
 		file_exists   = 0;
-		puts("New mbr88 v0.1 image (blank partition table).");
+		puts("New mbr88 v" MBR88_VER_STR " image (blank partition table).");
 		puts("  Use 'g' then 'n' to define partitions, 'v' for labels, 'w' to write.");
 		print_table();
 		/* fall through to command loop */
 	}
 
-	/* ------------------------------------------------------------------ */
-	/* Modes: patch / upgrade -- file must exist and be valid             */
-	/* ------------------------------------------------------------------ */
+	/* ******************************************************************
+	 * Modes: patch / upgrade -- file must exist and be valid
+	 */
 	if (mode_patch || mode_upgrade) {
 		if (load_and_validate() != 0)
 			return 1;
@@ -1310,7 +1310,7 @@ int main(int argc, char *argv[])
 			upgrade_to_mbr88();
 			has_mbr88_sig = 1;
 			dirty = 1;   /* boot code was replaced -- treat as unsaved change */
-			puts("Upgrade: boot code replaced with mbr88 v0.1, "
+			puts("Upgrade: boot code replaced with mbr88 v" MBR88_VER_STR ", "
 				"partition table preserved.");
 			puts("  Use 'v' to set labels, 'w' to write when done.");
 		} else {
@@ -1331,16 +1331,16 @@ int main(int argc, char *argv[])
 				}
 			} else {
 				has_mbr88_sig = 0;
-				puts("Generic MBR -- partition table editing only.");
+				puts("Generic MBR partition table editing only.");
 				puts("  Use -u to upgrade to mbr88 and enable label editing.");
 			}
 		}
 		print_table();
 	}
 
-	/* ------------------------------------------------------------------ */
-	/* Command loop -- shared by -p, -u, -n                               */
-	/* ------------------------------------------------------------------ */
+	/* ******************************************************************
+	 * Command loop -- shared by -p, -u, -n
+	 */
 	for (;;) {
 		int redraw = 0;
 		printf("Command (h for help): "); fflush(stdout);

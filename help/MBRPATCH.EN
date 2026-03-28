@@ -21,7 +21,7 @@ DESCRIPTION
   leaves the file completely untouched.
 
   Device writes (-w) are permanent and have no automatic backup.  Always
-  run mbrpatch -r first to save a copy of the existing MBR.
+  run mbrpatch -r first to save a copy of the existing MBR!
 
 ================================================================================
 USAGE
@@ -53,13 +53,13 @@ MODES
   -p -- PATCH MODE
 
     Validates the file the same way as view mode, then opens an interactive
-    session for editing partitions.  If the file contains an mbr88 v0.1
+    session for editing partitions.  If the file contains an mbr88 v0.2
     boot record, boot menu label editing is also available.  A higher mbr88
     version causes a message directing you to get a newer mbrpatch.
 
   -u -- UPGRADE MODE
 
-    Validates the file, replaces its boot code with the mbr88 v0.1 boot
+    Validates the file, replaces its boot code with the mbr88 v0.2 boot
     record, and preserves the existing partition table entries.  The file
     MUST already exist.  Use -n to create a new image from scratch.
     After the upgrade, the session starts with unsaved changes flagged so
@@ -67,7 +67,7 @@ MODES
 
   -n -- NEW MODE
 
-    Creates a blank mbr88 v0.1 image and opens the interactive session.
+    Creates a blank mbr88 v0.2 image and opens the interactive session.
     The target file MUST NOT already exist.  The program exits with an
     error if it does, preventing accidental overwrites.
 
@@ -117,7 +117,7 @@ INTERACTIVE COMMANDS
       Unlike most MBR loaders, mbr88 allows more than one partition
       to be bootable at once -- all such partitions appear in the menu.
 
-  v   Set the boot menu volume label for a partition (mbr88 v0.1 only).
+  v   Set the boot menu volume label for a partition (mbr88 v0.2 only).
       Up to 11 characters.  Shown in the boot menu next to the
       partition number.
 
@@ -197,28 +197,28 @@ EXAMPLES
 MBR88 BOOT RECORD
 ================================================================================
 
-  mbr88 is a custom MBR for IBM XT-class hardware.  It presents a boot menu
-  and always waits for the user to choose what to boot.  The menu supports
-  hard disk partitions 1-4 and floppy drives A and B.
+  MBR88 is a custom MBR for DOS compatable partitions.  It presents a boot
+  menu and always waits for the user to choose what to boot.  The menu 
+  supports hard disk partitions 1-4 and floppy drives A and B.
 
-  Only bootable partitions appear in the menu.  mbr88 allows more than one
+  Only bootable partitions appear in the menu.  MBR88 allows more than one
   partition to be bootable at once -- use the 'b' command in mbrpatch to
   set the flag on each partition you want selectable.  Conventional tools
   like FDISK enforce a single active partition; after running FDISK you
   will need to re-run mbrpatch to restore the flags on additional boot
   partitions.
 
-  The mbr88 boot record retries disk reads up to three times before
+  The MBR88 boot record retries disk reads up to three times before
   reporting an error, which allows floppy drive motors time to reach
   stable speed.
 
-  mbr88 is identified by the signature 'mbr88' at MBR offset 0x1B8,
-  followed by a version byte at 0x1BD.  Version 01 = v0.1.
+  MBR88 is identified by the signature 'mbr88' at MBR offset 0x1B8,
+  followed by a version byte at 0x1BD.  Version 01 = v0.2.
 
   Boot menu labels are stored at MBR offset 0x41 in four 16-byte slots.
   Each slot holds up to 11 characters displayed next to the partition
-  number in the boot menu.  Labels are only editable on mbr88 v0.1
-  images.  If a newer mbr88 version is found, get an updated mbrpatch:
+  number in the boot menu.  Labels are only editable on MBR88 v0.2
+  images.  If a newer MBR88 version is found, get an updated mbrpatch:
 
     https://github.com/cpiker/mbr88
 
@@ -259,6 +259,6 @@ SEE ALSO
 AUTHOR
 ================================================================================
 
-  Written by Claude (Anthropic) and verified by Chris Piker.
+  Chris Piker with the assistance of Claude (Anthropic)
   MIT License -- Copyright (c) 2025 Chris Piker.
 ================================================================================
