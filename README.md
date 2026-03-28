@@ -1,5 +1,6 @@
 # mbr88
-An OS independent 8088 clean MBR for dual booting ELKS, FreeDOS or other OS
+An OS independent 8088 op-code clean MBR for dual booting ELKS, FreeDOS or other
+OS up through Windows 98.
 
 A custom 512-byte MBR boot record for IBM XT-class hardware, plus supporting
 tools. Should work all the way through windows 95 era, so long as the machine
