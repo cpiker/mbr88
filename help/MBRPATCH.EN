@@ -1,0 +1,264 @@
+================================================================================
+MBRPATCH  --  MBR partition table viewer and editor
+Part of the mbr88 project: https://github.com/cpiker/mbr88
+MIT License  Copyright (c) 2025 Chris Piker
+================================================================================
+
+DESCRIPTION
+
+  mbrpatch reads, displays, and interactively edits the 512-byte Master
+  Boot Record of an IBM XT-class hard disk image.  It understands the
+  standard four-entry MBR partition table and the extended boot menu label
+  feature of the mbr88 boot record.
+
+  It can also read the MBR directly from a physical disk or write a
+  prepared MBR image back to disk, removing the need for out-of-band tools
+  like DEBUG.
+
+  Changes to image files are always held in memory until you confirm a
+  write with the 'w' command.  A backup copy (mbr_file.bak) is written
+  before the file is changed.  Pressing 'q' before confirming a write
+  leaves the file completely untouched.
+
+  Device writes (-w) are permanent and have no automatic backup.  Always
+  run mbrpatch -r first to save a copy of the existing MBR.
+
+================================================================================
+USAGE
+================================================================================
+
+  mbrpatch  <file>               View partition table of image file (read-only)
+  mbrpatch  -p  <file>           Patch an existing MBR image interactively
+  mbrpatch  -u  <file>           Upgrade existing MBR image to mbr88, then edit
+  mbrpatch  -n  <file>           Create a new blank mbr88 image, then edit
+  mbrpatch  -r  <file> <drive>   Read MBR from physical disk to image file
+  mbrpatch  -w  <file> <drive>   Write MBR image file to physical disk
+  mbrpatch  -h                   Print a short usage summary
+
+  <drive> is the BIOS drive number:
+    80h  =  first hard disk  (most common)
+    81h  =  second hard disk
+
+================================================================================
+MODES
+================================================================================
+
+  (no flag) -- VIEW MODE (read-only)
+
+    Reads the image file, checks that it is exactly 512 bytes and has a
+    valid 55 AA boot signature, prints the partition table, and exits.
+    The file is never modified.  Exits with an error if the file does not
+    exist, is not 512 bytes, or lacks the 55 AA signature.
+
+  -p -- PATCH MODE
+
+    Validates the file the same way as view mode, then opens an interactive
+    session for editing partitions.  If the file contains an mbr88 v0.1
+    boot record, boot menu label editing is also available.  A higher mbr88
+    version causes a message directing you to get a newer mbrpatch.
+
+  -u -- UPGRADE MODE
+
+    Validates the file, replaces its boot code with the mbr88 v0.1 boot
+    record, and preserves the existing partition table entries.  The file
+    MUST already exist.  Use -n to create a new image from scratch.
+    After the upgrade, the session starts with unsaved changes flagged so
+    the 'w' command will immediately offer to write the upgraded boot code.
+
+  -n -- NEW MODE
+
+    Creates a blank mbr88 v0.1 image and opens the interactive session.
+    The target file MUST NOT already exist.  The program exits with an
+    error if it does, preventing accidental overwrites.
+
+  -r -- READ DISK MODE
+
+    Reads the first sector (512 bytes) of the specified BIOS drive and
+    saves it to the output file.  The partition table is displayed before
+    saving.  The output file must not already exist (safety check).
+
+    Use this before editing or upgrading an MBR to create a backup:
+
+      mbrpatch -r original.bin 80h
+
+  -w -- WRITE DISK MODE
+
+    Loads the specified MBR image file, validates it, displays the
+    partition table, and asks for confirmation before writing the 512
+    bytes to the first sector of the specified BIOS drive.
+
+    THIS OPERATION IS PERMANENT.  There is no automatic backup.  Always
+    run -r first.  Wrong drive numbers may overwrite the wrong disk.
+
+      mbrpatch -w mbr.bin 80h
+
+================================================================================
+INTERACTIVE COMMANDS
+================================================================================
+
+  g   Set drive geometry (heads per cylinder and sectors per track).
+      Must be run before 'n'.  IBM XT default: 16 heads, 17 sectors.
+
+  n   Define a new partition or redefine an existing one.
+      Requires geometry to have been set with 'g' first.  Prompts for
+      starting CHS, ending CHS, partition type, and bootable flag.
+      LBA start and size are computed from the CHS values.
+
+  d   Delete a partition slot.  Zeros all 16 bytes of the entry and its
+      boot menu label.
+
+  t   Change the partition type byte of an existing entry.
+      Enter the type as hex without a leading prefix (e.g. type 06
+      for FAT16B).  Any value 00-FF is accepted; types not in the
+      built-in list display as "Unknown" in the partition summary.
+
+  b   Toggle the bootable flag (inactive / bootable).
+      mbr88 only shows bootable partitions in the boot menu.
+      Unlike most MBR loaders, mbr88 allows more than one partition
+      to be bootable at once -- all such partitions appear in the menu.
+
+  v   Set the boot menu volume label for a partition (mbr88 v0.1 only).
+      Up to 11 characters.  Shown in the boot menu next to the
+      partition number.
+
+  p   Print the current partition table.
+
+  l   List common partition type codes.
+
+  w   Ask for confirmation, write a backup copy to mbr_file.bak,
+      then write the changes to the file.
+
+  h   Print a short command summary.
+
+  q   Quit.  Prompts if there are unsaved changes.
+
+================================================================================
+PARTITION TYPE CODES (common values)
+================================================================================
+
+  00  Empty              0B  FAT32
+  01  FAT12              0C  FAT32 LBA
+  02  Xenix root         0E  FAT16 LBA
+  03  Xenix usr          0F  Extended LBA
+  04  FAT16 <32MB        11  Hidden FAT12
+  05  Extended           14  Hidden FAT16 <32MB
+  06  FAT16B >=32MB      16  Hidden FAT16B
+  07  HPFS/NTFS          1B  Hidden FAT32
+  0A  OS/2 Boot Mgr      1C  Hidden FAT32 LBA
+  64  NetWare 286        1E  Hidden FAT16 LBA
+  80  MINIX orig/ELKS    81  MINIX
+  82  Linux swap         83  Linux
+  DB  CP/M-86
+
+  Any value 00-FF is accepted.  Types not listed above display as
+  "Unknown" in the partition summary.
+
+================================================================================
+EXAMPLES
+================================================================================
+
+  Save the current MBR from the first hard disk before making any changes:
+
+    mbrpatch -r original.bin 80h
+
+  View the saved image without modifying it:
+
+    mbrpatch original.bin
+
+  Upgrade the MBR to mbr88, set labels, and write the image file:
+
+    mbrpatch -u original.bin
+
+    At the prompt:
+      g    (set geometry -- accept XT default or enter your values)
+      b    (mark each bootable partition)
+      v    (set a volume label, repeat for each partition)
+      w    (write the upgraded boot code back to the file)
+
+  Write the finished image to the hard disk (permanent -- no undo):
+
+    mbrpatch -w original.bin 80h
+
+  Create a fresh mbr88 image from scratch:
+
+    mbrpatch -n new.bin
+
+    At the prompt:
+      g    (set geometry)
+      n    (define partition 1, repeat for each partition)
+      b    (mark bootable partitions)
+      v    (set volume labels)
+      w    (write the new image to new.bin)
+
+    Then write it to disk:
+      mbrpatch -w new.bin 80h
+
+================================================================================
+MBR88 BOOT RECORD
+================================================================================
+
+  mbr88 is a custom MBR for IBM XT-class hardware.  It presents a boot menu
+  and always waits for the user to choose what to boot.  The menu supports
+  hard disk partitions 1-4 and floppy drives A and B.
+
+  Only bootable partitions appear in the menu.  mbr88 allows more than one
+  partition to be bootable at once -- use the 'b' command in mbrpatch to
+  set the flag on each partition you want selectable.  Conventional tools
+  like FDISK enforce a single active partition; after running FDISK you
+  will need to re-run mbrpatch to restore the flags on additional boot
+  partitions.
+
+  The mbr88 boot record retries disk reads up to three times before
+  reporting an error, which allows floppy drive motors time to reach
+  stable speed.
+
+  mbr88 is identified by the signature 'mbr88' at MBR offset 0x1B8,
+  followed by a version byte at 0x1BD.  Version 01 = v0.1.
+
+  Boot menu labels are stored at MBR offset 0x41 in four 16-byte slots.
+  Each slot holds up to 11 characters displayed next to the partition
+  number in the boot menu.  Labels are only editable on mbr88 v0.1
+  images.  If a newer mbr88 version is found, get an updated mbrpatch:
+
+    https://github.com/cpiker/mbr88
+
+================================================================================
+NOTES
+================================================================================
+
+  Drive numbers: BIOS hard disk numbers start at 80h.  80h is always the
+  first hard disk.  81h is the second.  Drive letters under DOS may be
+  remapped (for example by EtherDFS or network redirectors), so drive
+  letters are not used here.  Always use the BIOS number.
+
+  Drive geometry: IBM XT hard disks typically use 16 heads and 17 sectors
+  per track.  The geometry entered with 'g' must match the values used
+  when the partitions were originally created, or the computed LBA fields
+  will be wrong.  XT-class BIOSes use only the CHS fields and ignore LBA,
+  so wrong LBA values rarely cause problems in practice.
+
+  CHS values should be taken from fdisk or the drive's technical
+  specification.
+
+================================================================================
+FILES
+================================================================================
+
+  mbr_file.bak    Backup of the image file, written before any file write.
+                  No automatic backup is made for device writes (-w).
+
+================================================================================
+SEE ALSO
+================================================================================
+
+  FDISK.EXE -- FreeDOS partition editor
+  mbr88 project: https://github.com/cpiker/mbr88
+  compatibility.md -- notes on OS coexistence for multi-boot setups
+
+================================================================================
+AUTHOR
+================================================================================
+
+  Written by Claude (Anthropic) and verified by Chris Piker.
+  MIT License -- Copyright (c) 2025 Chris Piker.
+================================================================================

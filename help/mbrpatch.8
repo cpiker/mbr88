@@ -1,0 +1,434 @@
+.\" mbrpatch.8 - Manual page for mbrpatch
+.\" Part of the mbr88 project: https://github.com/cpiker/mbr88
+.\" MIT License - Copyright (c) 2025 Chris Piker
+.\"
+.\" Install: cp mbrpatch.8 /usr/share/man/man8/
+.\"          gzip /usr/share/man/man8/mbrpatch.8
+.\"
+.TH MBRPATCH 8 "2025" "mbr88 v0.1" "System Administration"
+.\"
+.\" -------------------------------------------------------------------------
+.SH NAME
+.\"
+mbrpatch \- view, edit, and transfer the MBR of an IBM XT-class hard disk
+.\"
+.\" -------------------------------------------------------------------------
+.SH SYNOPSIS
+.\"
+.B mbrpatch
+.I mbr_file
+.br
+.B mbrpatch \-p
+.I mbr_file
+.br
+.B mbrpatch \-u
+.I mbr_file
+.br
+.B mbrpatch \-n
+.I mbr_file
+.br
+.B mbrpatch \-r
+.I mbr_file
+.I device
+.br
+.B mbrpatch \-w
+.I mbr_file
+.I device
+.br
+.B mbrpatch \-h
+.\"
+.\" -------------------------------------------------------------------------
+.SH DESCRIPTION
+.\"
+.B mbrpatch
+reads, displays, and interactively edits the 512-byte Master Boot Record
+of an IBM XT-class hard disk image.
+It understands the standard four-entry MBR partition table and
+the extended boot menu label feature of the
+.B mbr88
+boot record.
+.PP
+It can also read the MBR directly from a physical disk device or write
+a prepared image back to disk, removing the need for out-of-band tools
+such as
+.BR dd (1)
+on Linux or
+.B DEBUG
+on DOS.
+.PP
+The program operates in one of six modes selected by a flag on the
+command line.
+When no flag is given the program runs in read-only view mode.
+Modes that write to an image file always ask for confirmation and write
+a backup copy immediately beforehand.
+Device writes
+.RB ( \-w )
+are permanent and have no automatic backup; use
+.B \-r
+to save a copy before proceeding.
+.\"
+.\" -------------------------------------------------------------------------
+.SH MODES
+.\"
+.TP
+.B mbrpatch \fImbr_file\fR
+.B "View mode (read-only)."
+Reads the file, validates it as a 512-byte MBR with a correct
+.B 55\ AA
+boot signature, prints the partition table, and exits.
+This mode never modifies the file.
+.TP
+.B mbrpatch \-p \fImbr_file\fR
+.B "Patch mode."
+Validates the file then enters an interactive command session.
+Partition table entries can be edited, deleted, and redefined.
+If the
+.B mbr88
+signature is present and the version is exactly
+.BR v0.1 ,
+boot menu label editing is also available.
+.TP
+.B mbrpatch \-u \fImbr_file\fR
+.B "Upgrade mode."
+Validates the file, replaces its boot code with the
+.B mbr88 v0.1
+boot record, and preserves the existing partition table entries.
+The file must already exist; use
+.B \-n
+to create a new image from scratch.
+.TP
+.B mbrpatch \-n \fImbr_file\fR
+.B "New mode."
+Creates a blank
+.B mbr88 v0.1
+image and enters the interactive command session.
+The target file must
+.I not
+already exist.
+.TP
+.B mbrpatch \-r \fImbr_file\fR \fIdevice\fR
+.B "Read disk mode."
+Reads the first 512-byte sector from
+.I device
+and saves it to
+.IR mbr_file .
+The partition table is displayed before saving.
+The output file must not already exist (safety check).
+.PP
+.RS
+On Linux and ELKS,
+.I device
+is a path such as
+.BR /dev/sda ,
+.BR /dev/hda ,
+or
+.BR /dev/cda .
+Writing to sector 0 requires root permissions.
+.PP
+On FreeDOS (Open Watcom build),
+.I device
+is the BIOS hard disk drive number expressed as a hex string:
+.B 80h
+for the first hard disk,
+.B 81h
+for the second, and so on.
+Drive letters are not used because they may be remapped by redirectors
+such as EtherDFS.
+.RE
+.TP
+.B mbrpatch \-w \fImbr_file\fR \fIdevice\fR
+.B "Write disk mode."
+Loads
+.I mbr_file
+and validates it, displays the partition table, asks for confirmation,
+then writes the 512-byte image to the first sector of
+.IR device .
+Device syntax is the same as
+.BR \-r .
+On Linux and ELKS a
+.BR sync (2)
+call is issued after the write to flush the kernel buffer cache.
+.PP
+.RS
+.B This operation is permanent and there is no automatic backup.
+Always run
+.B \-r
+first to save a copy of the existing MBR before using
+.BR \-w .
+.RE
+.TP
+.B mbrpatch \-h
+Print a usage summary and exit.
+.\"
+.\" -------------------------------------------------------------------------
+.SH INTERACTIVE COMMANDS
+.\"
+After loading a file in patch, upgrade, or new mode, the program presents
+a two-column partition table display and a command prompt.
+All changes are held in memory until explicitly written with
+.BR w .
+.PP
+.TS
+l l .
+\fBg\fR	Set drive geometry (heads per cylinder, sectors per track).
+	Must be run before \fBn\fR.  IBM XT default: 16 heads, 17 sectors.
+\fBn\fR	Define a new partition or redefine an existing one.
+	Requires geometry to have been set with \fBg\fR first.
+\fBd\fR	Delete a partition slot.  Zeros the 16-byte entry and its label.
+\fBt\fR	Change the partition type byte of an existing entry.
+\fBb\fR	Toggle the bootable flag (inactive / bootable).
+	See NOTES for mbr88 behaviour regarding this flag.
+\fBv\fR	Set the boot menu volume label for a partition (mbr88 v0.1 only).
+	Up to 11 characters, displayed in the boot menu.
+\fBp\fR	Print the current state of the partition table.
+\fBl\fR	List common partition type codes.
+\fBw\fR	Ask for confirmation, write a backup to \fImbr_file\fB.bak\fR,
+	then write the file.
+\fBh\fR	Print the command summary.
+\fBq\fR	Quit.  Prompts if there are unsaved changes.
+.TE
+.\"
+.\" -------------------------------------------------------------------------
+.SH PARTITION TABLE FORMAT
+.\"
+The MBR partition table occupies 64 bytes at offset
+.B 0x1BE
+and holds four 16-byte entries in the IBM CHS format used by the original
+PC/XT BIOS.
+Each entry contains:
+.PP
+.TS
+l l .
+Byte 0	Status: 0x00 = inactive, 0x80 = bootable
+Bytes 1\-3	CHS address of the first sector (packed)
+Byte 4	Partition type (e.g. 01=FAT12, 06=FAT16B, 83=Linux)
+Bytes 5\-7	CHS address of the last sector (packed)
+Bytes 8\-11	LBA start sector (32-bit little-endian, computed from CHS)
+Bytes 12\-15	LBA sector count (32-bit little-endian, computed from CHS)
+.TE
+.\"
+.\" -------------------------------------------------------------------------
+.SH MBR88 FEATURES
+.\"
+.B mbr88
+is a custom MBR boot record for IBM XT-class hardware that presents an
+interactive boot menu and always waits for the user to choose what to boot.
+It supports hard disk partitions 1 through 4 and floppy drives A and B.
+.PP
+Only partitions with status byte
+.B 0x80
+appear in the
+.B mbr88
+boot menu.
+Unlike conventional single-boot MBR loaders,
+.B mbr88
+permits more than one partition to be marked bootable
+simultaneously; all marked partitions will appear in the menu.
+Use the
+.B b
+interactive command to set the flag on each partition to be shown.
+.PP
+Conventional partitioning tools such as
+.BR FDISK
+enforce a single active partition.
+After running such tools it is necessary to re-run
+.B mbrpatch \-p
+to restore the bootable flag on any additional boot partitions.
+.PP
+The
+.B mbr88
+boot record is identified by the five-byte ASCII signature
+.B mbr88
+at MBR offset
+.BR 0x1B8 ,
+followed by a version byte at
+.BR 0x1BD .
+Version
+.B 0x01
+corresponds to
+.BR v0.1 .
+.PP
+When an
+.B mbr88 v0.1
+image is loaded, four 16-byte label slots at offset
+.B 0x41
+become editable via the
+.B v
+command.
+Each slot holds up to 11 characters of ASCII text displayed in the boot menu.
+.\"
+.\" -------------------------------------------------------------------------
+.SH EXAMPLES
+.\"
+.B Save a backup of the live MBR before making any changes (Linux / ELKS):
+.PP
+.RS
+.nf
+mbrpatch \-r original.bin /dev/hda
+.fi
+.RE
+.PP
+.B Save a backup of the live MBR before making any changes (FreeDOS):
+.PP
+.RS
+.nf
+mbrpatch \-r original.bin 80h
+.fi
+.RE
+.PP
+.B View the saved image without modifying it:
+.PP
+.RS
+.nf
+mbrpatch original.bin
+.fi
+.RE
+.PP
+.B Upgrade an existing MBR to mbr88, set labels, and write to the image file:
+.PP
+.RS
+.nf
+mbrpatch \-u original.bin
+.fi
+.RE
+At the prompt, use
+.B g
+to set geometry,
+.B b
+to mark bootable partitions,
+.B v
+to add labels, then
+.B w
+to write.
+.PP
+.B Write the finished image to disk (permanent, no undo):
+.PP
+.RS
+.nf
+mbrpatch \-w original.bin /dev/hda     (Linux / ELKS)
+mbrpatch \-w original.bin 80h          (FreeDOS)
+.fi
+.RE
+.PP
+.B Creating a new mbr88 image from scratch:
+.PP
+.RS
+.nf
+mbrpatch \-n new.bin
+.fi
+.RE
+Use
+.B g
+then
+.B n
+to define partitions,
+.B b
+to mark them bootable,
+.B v
+to set labels, then
+.B w
+to write the file.
+.\"
+.\" -------------------------------------------------------------------------
+.SH NOTES
+.\"
+.B Bootable flag.
+The status byte at offset 0 of each partition entry controls which
+partitions
+.B mbr88
+shows in the boot menu.
+Only bootable partitions are displayed.
+Multiple partitions may safely be marked bootable simultaneously when
+using
+.B mbr88
+as the boot loader.
+Other MBR loaders typically require exactly one active partition.
+.PP
+.B Device writes.
+The
+.B \-w
+mode writes directly to hardware and cannot be undone.
+Always save a backup with
+.B \-r
+before using
+.BR \-w .
+On Linux and ELKS, writing sector 0 of a block device requires
+root (superuser) permissions.
+A
+.BR sync (2)
+call is issued automatically after the write on Linux and ELKS.
+.PP
+.B BIOS drive numbers.
+On FreeDOS the disk is identified by its BIOS drive number.
+.B 0x80
+(written as
+.B 80h
+on the command line) is always the first hard disk.
+.B 0x81
+is the second.
+Drive letters are deliberately not used because they may be remapped
+by network redirectors and other drivers.
+.PP
+.B Backup files.
+A backup of the image file is written to
+.I mbr_file\fB.bak\fR
+immediately before any write operation to that file.
+No automatic backup is made when writing to a device with
+.BR \-w .
+.PP
+.B Drive geometry.
+IBM XT hard disks typically use 16 heads per cylinder and 17 sectors
+per track.
+Incorrect geometry produces wrong LBA start and size values.
+XT-class BIOSes use only the CHS fields and ignore LBA, so this
+rarely causes a problem in practice.
+.\"
+.\" -------------------------------------------------------------------------
+.SH FILES
+.\"
+.TP
+.I mbr_file.bak
+Backup of the image file, written immediately before any write
+to the file.
+.TP
+.I /usr/share/man/man8/mbrpatch.8
+This manual page.
+.\"
+.\" -------------------------------------------------------------------------
+.SH SEE ALSO
+.\"
+.BR fdisk (8),
+.BR dd (1),
+.BR hexdump (1)
+.PP
+.B mbr88 project:
+.I https://github.com/cpiker/mbr88
+.PP
+.B OS coexistence notes:
+.I compatibility.md
+in the project sources.
+.\"
+.\" -------------------------------------------------------------------------
+.SH BUGS
+.\"
+CHS-to-LBA conversion uses the geometry entered with the
+.B g
+command.
+If the geometry does not match the actual drive the LBA fields will be
+wrong.
+Most XT-class BIOSes use only the CHS fields and ignore LBA entirely, so
+this rarely causes a problem in practice, but modern tools that read the
+LBA fields may report incorrect values.
+.PP
+The program does not validate that partition regions are non-overlapping
+or that CHS end values are greater than CHS start values.
+.\"
+.\" -------------------------------------------------------------------------
+.SH AUTHOR
+.\"
+Written by Claude (Anthropic) and verified by Chris Piker.
+.PP
+Part of the
+.B mbr88
+project.
+MIT License \(em Copyright (c) 2025 Chris Piker.
