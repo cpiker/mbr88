@@ -16,7 +16,7 @@ hard drive or flash card.
 
 ![Screenshot ELKS/FreeDOS dualboot](screenshot.png)
 
-Written by Claude Code under the interrogation of C. Piker.  Verified on a 
-Leading Edge Model D with two floppy drives and a four partition hard
-disk with both ELKS Linux and FreeDos installed.
-
+Written by Claude Code under heavy interrogation by C. Piker.  Verified on
+a Leading Edge Model D with two floppy drives and a four partition hard
+disk with both ELKS Linux and FreeDos installed.  More hardware verification
+in the works.
