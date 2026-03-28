@@ -26,4 +26,4 @@ in the works.
 
 ## Acknowledgement
 Thanks to osdev.org for the reference material and insights that informed the
-design of this boot record, especially thecreators of [this page](https://wiki.osdev.org/MBR_(x86)).
+design of this boot record, especially the creators of [this page](https://wiki.osdev.org/MBR_(x86)).
