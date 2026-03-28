@@ -1,4 +1,4 @@
-# mbr88
+# MBR88
 An OS independent 8088 op-code clean MBR for dual booting ELKS, FreeDOS or other
 OS up through Windows 98.  Patching tool currently cross compiles for 
 [ELKS](https://github.com/ghaerr/elks).  Adding [FreeDOS](https://github.com/FDOS)
