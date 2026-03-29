@@ -1,5 +1,5 @@
 ; =============================================================================
-; mbr88_nasm.asm — Custom x86 Master Boot Record
+; mbr88.asm — Custom x86 Master Boot Record
 ; Target CPU: Intel 8088 / 8086 (IBM PC/XT compatible)
 ; NASM flat-binary syntax
 ;
@@ -13,7 +13,7 @@
 ;
 ; License:
 ;   MIT License
-;   Copyright (c) 2025 Chris Piker
+;   Copyright (c) 2026 Chris Piker
 ;
 ;   Permission is hereby granted, free of charge, to any person obtaining
 ;   a copy of this software and associated documentation files (the
@@ -53,10 +53,10 @@
 ;   C. Piker         2025-03-22  Leading Edge Model D, Two Floppies,
 ;                                SD card hard-drive with XTIDE Bios
 ;
-; Assemble:       nasm -f bin mbr88_nasm.asm -o mbr.bin
-; Verify size:    ls -l mbr.bin          (must be exactly 512 bytes)
-; Verify sig:     xxd mbr.bin | tail -1  (must end in 55 aa)
-; Write to disk:  dd if=mbr.bin of=/dev/sdX bs=512 count=1  *** CAREFUL ***
+; Assemble:       nasm -f bin src/mbr88.asm -o build/native/mbr88.bin
+; Verify size:    ls -l build/native/mbr88.bin   (must be exactly 512 bytes)
+; Verify sig:     xxd build/native/mbr88.bin | tail -1  (must end in 55 aa)
+; Write to disk:  dd if=mbr88.bin of=/dev/sdX bs=512 count=1  *** CAREFUL ***
 ;
 ; 8088 instruction set constraints observed throughout:
 ;   - No 32-bit registers (EAX/EBX/etc are 386+)
@@ -79,17 +79,17 @@
 ;   Boot:
 ;   A Floppy
 ;   B Floppy
-;   1 <label>       (only shown if partition slot is non-empty)
+;   1 <label>       (only shown if partition slot is bootable, status=0x80)
 ;   >
 ;
 ; Labels are stored in part_labels (four 16-byte slots).
-; Each slot: 11 chars + CR + LF + null + 2 pad bytes.
-; mbr_patch writes them alongside the partition table entries.
+; Each slot: 1-11 printable ASCII chars + CR + LF + null + zero padding.
+; mbrpatch writes them alongside the partition table entries.
 ;
 ; Valid keystrokes:
 ;   A / a  — boot floppy drive A  (BIOS drive 00h)
 ;   B / b  — boot floppy drive B  (BIOS drive 01h)
-;   1 - 4  — boot that hard disk partition (ignored if slot is empty)
+;   1 - 4  — boot that hard disk partition (ignored if slot is not bootable)
 ;
 ; VBR handoff:
 ;   A CR+LF is emitted before the far jump so VBR output starts on a
@@ -150,12 +150,43 @@
 ;   0x02D-0x03F  str_no_boot: ": No boot record\r\n\0" (19 bytes)
 ;   0x040        scratch_char: display char of last selected device (1 byte)
 ;   0x041-0x080  part_labels: four 16-byte label slots, zeroed at build time
-;   0x081-0x1B6  Boot code (instructions)
-;   0x1B7        Zero padding (up to 7 bytes — binary has ~7 bytes of slack)
-;   0x1B8-0x1BC  'mbr88' signature (5 bytes)
-;   0x1BD        Version byte: high nibble = major, low nibble = minor (0x01 = v0.1)
+;   0x081-0x1AF  Boot code (instructions)
+;   0x1B0        Zero padding (1 byte code slack — absorbs single-byte code growth)
+;   0x1B1        0xD9 — Cassini commemorative byte (see note below)
+;   0x1B2-0x1B6  'mbr88' signature (5 bytes: 6D 62 72 38 38)
+;   0x1B7        Version byte: high nibble = major, low nibble = minor (0x02 = v0.2)
+;   0x1B8-0x1BB  NT/OS2 disk signature region (left clear — not used by mbr88)
+;   0x1BC-0x1BD  NT/OS2 reserved word (left clear)
 ;   0x1BE-0x1FD  Partition table (4 x 16-byte entries)
 ;   0x1FE-0x1FF  Boot signature 55h AAh
+;
+; Cassini commemorative byte (0x1B1 = 0xD9):
+;   "So on Sept. 15th 2017 I was up all night nursing along a packet parser 
+;    for the RPWS instrument on the Cassini spacecraft. The mission was almost
+;    over and it was time for us to plunge Cassini into Saturn's atmosphere 
+;    while we still had enough fuel to change orbits.
+;
+;    A week before, our collegues over in Sweeden wanted to have a Cassini 
+;    Crash Party complete with live data feeds, problem was, they could only
+;    read files, and our packet parser only flushed files every 30 minutes.
+;    That's kinda slow for a party display so I stopped the autoprocessor and
+;    stayed up all night kicking off file creation every 5 minutes, and
+;    watching for errors. There was little to do but watch packets go by as
+;    Cassini barrelled towards Saturn.
+;
+;    Finally sometime around 4 AM, the telemetry stream just stopped. I checked
+;    our socket to the Deep Space Network. It was good, but there were no more
+;    packets. So I ran a hex dump on the last partal packet and doubled over 
+;    laughing... in an empty building... in the middle of the night.
+;
+;    The last byte was 0xD9 
+;
+;    Cassini had punked us. 
+;
+;    After this byte we were absolutely "Dee-Nined" any more data :-)
+;    "
+;  
+;    - C. Piker, MBR88 developer
 ; =============================================================================
 
         bits    16
@@ -190,8 +221,8 @@ scratch_char:
 
 ; part_labels — four 16-byte slots, one per partition entry.
 ; Slot layout:
-;   Bytes  0-10  Label text (up to 11 ASCII characters)
-;   Bytes 11-12  CR + LF (0x0D 0x0A) — required for line break
+;   Bytes  0-10  Label text (1 to 11 printable ASCII characters, 0x20-0x7E)
+;   Bytes 11-12  CR + LF (0x0D 0x0A) — may appear earlier if label is short
 ;   Byte   13    Null terminator (stops print_str)
 ;   Bytes 14-15  Zero padding
 part_labels:
@@ -415,7 +446,7 @@ bad_vbr:
 ; Prints:
 ;   A Floppy\r\n
 ;   B Floppy\r\n
-;   N <label>\r\n   (for each non-empty partition, N = '1'..'4')
+;   N <label>\r\n   (for each bootable partition, N = '1'..'4')
 ;
 ; CX/CL aliasing: LOOP decrements the full 16-bit CX.  The shift count
 ; for index*16 is loaded into CL (= low byte of CX) which would reset
@@ -493,27 +524,41 @@ print_str:
         ret
 
 ; =============================================================================
-; Signature and partition table.
+; Tail area — slack, Cassini byte, mbr88 signature, version, NT region.
 ;
-; 'mbr88' (5 bytes) is placed at MBR offset 0x1B8 followed immediately by
-; the version byte 0x01 at 0x1BD.  Version encoding: high nibble = major,
-; low nibble = minor (0x01 = v0.1).
+; Layout from 0x1B0:
+;   0x1B0        Zero padding (1 byte code slack — absorbs single-byte growth)
+;   0x1B1        0xD9 — Cassini commemorative byte
+;   0x1B2-0x1B6  'mbr88' signature (5 bytes)
+;   0x1B7        Version byte 0x02 (high nibble=major=0, low nibble=minor=2)
+;   0x1B8-0x1BB  NT/OS2 disk signature region (zeroed — not used by mbr88)
+;   0x1BC-0x1BD  NT/OS2 reserved word (zeroed)
+;   0x1BE        Partition table begins
 ;
-; The reserved area 0x1B8-0x1BD is used in full:
-;   0x1B8-0x1BC  'mbr88' signature
-;   0x1BD        version byte (0x01 = v0.1)
-;
-; Magic numbers are identified by position and length, not null termination.
+; The NT disk signature region (0x1B8-0x1BB) is intentionally left clear.
+; Windows NT and OS/2 write a random 32-bit disk identifier here.  Occupying
+; this region (as v0.1 did) prevents those OSes from installing cleanly on
+; the same disk.  Moving the mbr88 signature to 0x1B2 frees the NT region
+; entirely, improving compatibility with 286-class hardware and NT-family OSes
+; should this MBR ever be used beyond XT-class targets.
 ; =============================================================================
-        times   1B8h - ($ - $$)  db 0  ; pad to signature (~7 bytes slack currently)
+
+        times   1B1h - ($ - $$)  db 0  ; code slack (1 byte at 0x1B0)
+
+        db      0D9h                    ; 0x1B1 — Cassini: last byte from Saturn, 2017-09-15
 
 mbr_sig:
-        db      'mbr88'                 ; 5-byte signature: 6D 62 72 38 38
+        db      'mbr88'                 ; 0x1B2-0x1B6 — 5-byte signature: 6D 62 72 38 38
+
 mbr_ver:
-        db      01h                     ; version 0.1 (major=0, minor=1)
+        db      02h                     ; 0x1B7 — version 0.2 (major=0, minor=2)
+
+        ; NT disk signature region and reserved word — must remain zeroed.
+        ; times expression pads from 0x1B8 through 0x1BD (6 bytes).
+        times   1BEh - ($ - $$)  db 0
 
 part_table:
-        times   64  db 0                ; written by mbr_patch
+        times   64  db 0                ; 0x1BE-0x1FD — written by mbrpatch
 
         times   510 - ($ - $$)  db 0
         db      55h

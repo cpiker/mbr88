@@ -82,7 +82,7 @@ $(BE)/mbrpatch:src/mbrpatch.c $(BE)/mbr88.h
 #
 #$(BE)/mbr88_g.o:src/mbr88_g.s
 #	ia16-elf-as -o $@ $<
-
+#
 #$(BE)/mbr88_g.bin:$(BE)/mbr88_g.o
 #	ia16-elf-ld -Ttext=0x7C00 --oformat=binary -o $@ $<
 

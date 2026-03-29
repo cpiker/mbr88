@@ -5,27 +5,34 @@
  * MIT License — Copyright (c) 2026 Chris Piker
  *
  * AI Disclosure:
- *   This code was generated with Claude, which is an Artifical Intelligence
+ *   This code was generated with Claude, which is an Artificial Intelligence
  *   service provided by Anthropic. Though the design and development was
- *   orchastrated by a human, and the outputs were verified on real vintage
+ *   orchestrated by a human, and the outputs were verified on real vintage
  *   hardware, most of the actual code was composed by an AI.
  *
  *   It's completely understandable that AI generated software may not be
  *   suitable for some projects. Please check the contribution guidelines of
  *   any projects you participate in. If the project has a rule against AI
- *   generate software then DO NOT INCLUDE THIS FILE or it's contents in your
+ *   generated software then DO NOT INCLUDE THIS FILE or its contents in your
  *   patches or pull requests!
  *
  * Usage:
  *   mk_head <mbr.bin> mbr88.h
  *
- * Reads a 512-byte MBR binary (typically mbr.bin produced by NASM or
- * ia16-elf-ld) and writes a C header file containing the byte array used
- * by mbr_patch.c for the -u (upgrade) flag.
+ * Reads a 512-byte MBR binary (produced by nasm -f bin src/mbr88.asm) and
+ * writes a C header file containing:
+ *   - The full 512-byte boot record as a byte array (MBR88_TEMPLATE)
+ *   - Offset and size constants used by mbrpatch.c
  *
- * Intended to be run as part of the build process so that mbr88_template.h
- * is always in sync with the assembled binary.  See the project Makefile.
+ * Intended to be run as part of the build process so that mbr88.h is always
+ * in sync with the assembled binary.  See the project Makefile.
  *
+ * Binary layout constants (must match mbr88.asm):
+ *   SIG_OFFSET   0x1B2  — 'mbr88' signature (5 bytes)
+ *   VER_OFFSET   0x1B7  — version byte (high nibble=major, low nibble=minor)
+ *   CASSINI_OFF  0x1B1  — commemorative byte 0xD9, last byte from Cassini
+ *                         spacecraft as it entered Saturn's atmosphere,
+ *                         2017-09-15.  "Dee Nined."
  */
 
 #include <stdio.h>
@@ -35,130 +42,150 @@
 #define MBR_SIZE         512
 #define BYTES_PER_ROW    12
 
-/* Known offsets — these are verified at runtime against the binary */
-#define SIG_OFFSET       0x1B8
+/* Known offsets — must match mbr88.asm exactly.  Verified at runtime. */
+#define SIG_OFFSET       0x1B2   /* 'mbr88' signature, 5 bytes             */
 #define SIG_LEN          5
-#define VER_OFFSET       0x1BD
+#define VER_OFFSET       0x1B7   /* version byte                            */
+#define CASSINI_OFF      0x1B1   /* 0xD9 — last byte from Saturn, 2017-09-15*/
 #define BOOTSIG_OFFSET   0x1FE
-#define LABEL_BASE       0x41    /* offset of first label slot */
-#define LABEL_SLOT_SZ    16      /* bytes per label slot */
-#define LABEL_MAX        11      /* max label text length */
+#define LABEL_BASE       0x41    /* offset of first label slot              */
+#define LABEL_SLOT_SZ    16      /* bytes per label slot                    */
+#define LABEL_MAX        11      /* max label text length                   */
 
 static const unsigned char EXPECTED_SIG[SIG_LEN] = {'m','b','r','8','8'};
+static const unsigned char EXPECTED_CASSINI       = 0xD9;
 
 int main(int argc, char *argv[])
 {
-    FILE          *fin, *fout;
-    unsigned char  buf[MBR_SIZE];
-    int            i, row;
-    const char    *inpath, *outpath;
+	FILE          *fin, *fout;
+	unsigned char  buf[MBR_SIZE];
+	int            i, row;
+	const char    *inpath, *outpath;
 
-    if (argc != 3) {
-        fprintf(stderr, "Usage: mk_head <mbr.bin> mbr88.h\n");
-        return 1;
-    }
+	if (argc != 3) {
+		fprintf(stderr, "Usage: mk_head <mbr.bin> mbr88.h\n");
+		return 1;
+	}
 
-    inpath  = argv[1];
-    outpath = argv[2];
+	inpath  = argv[1];
+	outpath = argv[2];
 
-    /* Read the binary */
-    fin = fopen(inpath, "rb");
-    if (!fin) {
-        perror(inpath);
-        return 1;
-    }
-    if (fread(buf, 1, MBR_SIZE, fin) != MBR_SIZE) {
-        fprintf(stderr, "Error: '%s' must be exactly %d bytes.\n",
-                inpath, MBR_SIZE);
-        fclose(fin);
-        return 1;
-    }
-    fclose(fin);
+	/* Read the binary */
+	fin = fopen(inpath, "rb");
+	if (!fin) {
+		perror(inpath);
+		return 1;
+	}
+	if (fread(buf, 1, MBR_SIZE, fin) != MBR_SIZE) {
+		fprintf(stderr, "Error: '%s' must be exactly %d bytes.\n",
+			inpath, MBR_SIZE);
+		fclose(fin);
+		return 1;
+	}
+	fclose(fin);
 
-    /* Validate boot signature */
-    if (buf[BOOTSIG_OFFSET] != 0x55 || buf[BOOTSIG_OFFSET + 1] != 0xAA) {
-        fprintf(stderr, "Error: '%s' has no 55 AA boot signature at 0x1FE.\n",
-                inpath);
-        return 1;
-    }
+	/* Validate boot signature */
+	if (buf[BOOTSIG_OFFSET] != 0x55 || buf[BOOTSIG_OFFSET + 1] != 0xAA) {
+		fprintf(stderr, "Error: '%s' has no 55 AA boot signature at 0x1FE.\n",
+			inpath);
+		return 1;
+	}
 
-    /* Validate mbr88 signature */
-    if (memcmp(buf + SIG_OFFSET, EXPECTED_SIG, SIG_LEN) != 0) {
-        fprintf(stderr,
-                "Error: '%s' does not contain the 'mbr88' signature at 0x%03X.\n"
-                "       This tool only generates templates from mbr88 binaries.\n",
-                inpath, SIG_OFFSET);
-        return 1;
-    }
+	/* Validate mbr88 signature */
+	if (memcmp(buf + SIG_OFFSET, EXPECTED_SIG, SIG_LEN) != 0) {
+		fprintf(stderr,
+			"Error: '%s' does not contain the 'mbr88' signature at 0x%03X.\n"
+			"       This tool only generates templates from mbr88 binaries.\n",
+			inpath, SIG_OFFSET);
+		return 1;
+	}
 
-    /* Report version from binary */
-    {
-        unsigned char ver = buf[VER_OFFSET];
-        fprintf(stderr, "mbr88 v%d.%d detected in '%s'.\n",
-                (ver >> 4) & 0x0F, ver & 0x0F, inpath);
-    }
+	/* Validate Cassini byte — informational warning only, not fatal */
+	if (buf[CASSINI_OFF] != EXPECTED_CASSINI) {
+		fprintf(stderr,
+			"Warning: Cassini byte at 0x%03X is 0x%02X, expected 0xD9.\n",
+			CASSINI_OFF, buf[CASSINI_OFF]);
+	}
 
-    /* Write the header file */
-    fout = fopen(outpath, "w");
-    if (!fout) {
-        perror(outpath);
-        return 1;
-    }
+	/* Report version from binary */
+	{
+		unsigned char ver = buf[VER_OFFSET];
+		fprintf(stderr, "mbr88 v%d.%d detected in '%s'.\n",
+			(ver >> 4) & 0x0F, ver & 0x0F, inpath);
+	}
 
-    fprintf(fout,
-        "/*\n"
-        " * mbr88.h — Blank mbr88 boot record as a C byte array\n"
-        " *\n"
-        " * This file is part of the mbr88 project.\n"
-        " * MIT License — Copyright (c) 2025 Chris Piker\n"
-        " *\n"
-        " * DO NOT EDIT BY HAND.  This file is generated by mk_head.c\n"
-        " *\n"
-        " * To regenerate after modifying mbr88_nasm.asm or mbr88_gas.s:\n"
-        " *   nasm -f bin mbr88_nasm.asm -o mbr.bin\n"
-        " *   ./mk_head mbr.bin mbr88.h\n"
-        " *\n"
-        " * mbrpatch.c uses this template for the -u (upgrade) flag.\n"
-        " * The signature 'mbr88' is at offset 0x%03X; version byte at 0x%03X.\n"
-        " */\n"
-        "\n"
-        "#ifndef MBR88_TEMPLATE_H\n"
-        "#define MBR88_TEMPLATE_H\n"
-        "\n"
-        "#define MBR88_VER_STR        \"0.2\" /* for program help text */\n"
-        "#define MBR88_VER_MAJOR      0\n"
-        "#define MBR88_VER_MINOR      2\n"
-        "#define MBR88_VER_BYTE       0x02\n"
-        "#define MBR88_TEMPLATE_SIZE  %d\n"
-        "#define MBR88_SIG_OFFSET     0x%03X   /* offset of 'mbr88' signature */\n"
-        "#define MBR88_SIG_LEN        %d       /* length of signature (no null) */\n"
-        "#define MBR88_VER_OFFSET     0x%03X   /* version byte: high=major, low=minor */\n"
-        "#define MBR88_LABEL_BASE     0x%X    /* offset of first label slot */\n"
-        "#define MBR88_LABEL_SLOT_SZ  %d      /* bytes per label slot */\n"
-        "#define MBR88_LABEL_MAX      %d      /* max label text length */\n"
-        "\n"
-        "static const unsigned char MBR88_TEMPLATE[MBR88_TEMPLATE_SIZE] = {\n",
-        SIG_OFFSET, VER_OFFSET, MBR_SIZE, SIG_OFFSET, SIG_LEN, VER_OFFSET, 
-        LABEL_BASE, LABEL_SLOT_SZ, LABEL_MAX
-    );
+	/* Write the header file */
+	fout = fopen(outpath, "w");
+	if (!fout) {
+		perror(outpath);
+		return 1;
+	}
 
-    for (row = 0; row < MBR_SIZE; row += BYTES_PER_ROW) {
-        fprintf(fout, "    ");
-        for (i = row; i < row + BYTES_PER_ROW && i < MBR_SIZE; i++) {
-            int last = (i == MBR_SIZE - 1);
-            fprintf(fout, "0x%02X%s", buf[i], last ? "" : ",");
-            if (!last && (i + 1) % BYTES_PER_ROW != 0)
-                fprintf(fout, " ");
-        }
-        fprintf(fout, "\n");
-    }
+	fprintf(fout,
+		"/*\n"
+		" * mbr88.h — Blank mbr88 boot record as a C byte array\n"
+		" *\n"
+		" * This file is part of the mbr88 project.\n"
+		" * MIT License — Copyright (c) 2026 Chris Piker\n"
+		" *\n"
+		" * DO NOT EDIT BY HAND.  This file is generated by mk_head.c\n"
+		" *\n"
+		" * To regenerate after modifying src/mbr88.asm:\n"
+		" *   nasm -f bin src/mbr88.asm -o build/native/mbr88.bin\n"
+		" *   ./build/native/mk_head build/native/mbr88.bin build/native/mbr88.h\n"
+		" *\n"
+		" * mbrpatch.c uses this template for the -u (upgrade) flag.\n"
+		" *\n"
+		" * Binary layout offsets (authoritative source: src/mbr88.asm):\n"
+		" *   0x1B0        Code slack (1 zero byte)\n"
+		" *   0x1B1        0xD9 Cassini byte — last telemetry from Saturn, 2017-09-15\n"
+		" *   0x%03X-0x%03X  'mbr88' signature (5 bytes)\n"
+		" *   0x%03X        Version byte (high nibble=major, low nibble=minor)\n"
+		" *   0x1B8-0x1BB  NT/OS2 disk signature region (left clear)\n"
+		" *   0x1BC-0x1BD  NT/OS2 reserved word (left clear)\n"
+		" *   0x1BE-0x1FD  Partition table (4 x 16 bytes)\n"
+		" *   0x1FE-0x1FF  Boot signature 55 AA\n"
+		" */\n"
+		"\n"
+		"#ifndef MBR88_TEMPLATE_H\n"
+		"#define MBR88_TEMPLATE_H\n"
+		"\n"
+		"#define MBR88_VER_STR        \"0.2\" /* for program help text */\n"
+		"#define MBR88_VER_MAJOR      0\n"
+		"#define MBR88_VER_MINOR      2\n"
+		"#define MBR88_VER_BYTE       0x02\n"
+		"#define MBR88_TEMPLATE_SIZE  %d\n"
+		"#define MBR88_SIG_OFFSET     0x%03X   /* offset of 'mbr88' signature */\n"
+		"#define MBR88_SIG_LEN        %d       /* length of signature (no null) */\n"
+		"#define MBR88_VER_OFFSET     0x%03X   /* version byte: high=major, low=minor */\n"
+		"#define MBR88_LABEL_BASE     0x%X    /* offset of first label slot */\n"
+		"#define MBR88_LABEL_SLOT_SZ  %d      /* bytes per label slot */\n"
+		"#define MBR88_LABEL_MAX      %d      /* max label text length */\n"
+		"\n"
+		"static const unsigned char MBR88_TEMPLATE[MBR88_TEMPLATE_SIZE] = {\n",
+		SIG_OFFSET, SIG_OFFSET + SIG_LEN - 1,
+		VER_OFFSET,
+		MBR_SIZE, SIG_OFFSET, SIG_LEN, VER_OFFSET,
+		LABEL_BASE, LABEL_SLOT_SZ, LABEL_MAX
+	);
 
-    fprintf(fout,
-        "};\n"
-        "\n"
-        "#endif /* MBR88_TEMPLATE_H */\n");
+	for (row = 0; row < MBR_SIZE; row += BYTES_PER_ROW) {
+		fprintf(fout, "\t");
+		for (i = row; i < row + BYTES_PER_ROW && i < MBR_SIZE; i++) {
+			int last = (i == MBR_SIZE - 1);
+			fprintf(fout, "0x%02X%s", buf[i], last ? "" : ",");
+			if (!last && (i + 1) % BYTES_PER_ROW != 0)
+				fprintf(fout, " ");
+		}
+		fprintf(fout, "\n");
+	}
 
-    fclose(fout);
-    fprintf(stderr, "Written: %s\n", outpath);
-    return 0;
+	fprintf(fout,
+		"};\n"
+		"\n"
+		"#endif /* MBR88_TEMPLATE_H */\n");
+
+	fclose(fout);
+	fprintf(stderr, "Written: %s\n", outpath);
+	return 0;
 }

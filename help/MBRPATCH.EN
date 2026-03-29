@@ -1,7 +1,7 @@
 ================================================================================
 MBRPATCH  --  MBR partition table viewer and editor
 Part of the mbr88 project: https://github.com/cpiker/mbr88
-MIT License  Copyright (c) 2025 Chris Piker
+MIT License  Copyright (c) 2026 Chris Piker
 ================================================================================
 
 DESCRIPTION
@@ -9,7 +9,7 @@ DESCRIPTION
   mbrpatch reads, displays, and interactively edits the 512-byte Master
   Boot Record of an IBM XT-class hard disk image.  It understands the
   standard four-entry MBR partition table and the extended boot menu label
-  feature of the mbr88 boot record.
+  feature of the mbr88 v0.2 boot record.
 
   It can also read the MBR directly from a physical disk or write a
   prepared MBR image back to disk, removing the need for out-of-band tools
@@ -60,10 +60,12 @@ MODES
   -u -- UPGRADE MODE
 
     Validates the file, replaces its boot code with the mbr88 v0.2 boot
-    record, and preserves the existing partition table entries.  The file
-    MUST already exist.  Use -n to create a new image from scratch.
-    After the upgrade, the session starts with unsaved changes flagged so
-    the 'w' command will immediately offer to write the upgraded boot code.
+    record, and preserves the existing partition table entries.  Existing
+    label slots are recovered if they contain valid mbr88 label data; slots
+    that do not pass the validity check are zeroed.  The file MUST already
+    exist.  Use -n to create a new image from scratch.  After the upgrade,
+    the session starts with unsaved changes flagged so the 'w' command will
+    immediately offer to write the upgraded boot code.
 
   -n -- NEW MODE
 
@@ -165,14 +167,14 @@ EXAMPLES
 
     mbrpatch original.bin
 
-  Upgrade the MBR to mbr88, set labels, and write the image file:
+  Upgrade the MBR to mbr88 v0.2, set labels, and write the image file:
 
     mbrpatch -u original.bin
 
     At the prompt:
       g    (set geometry -- accept XT default or enter your values)
       b    (mark each bootable partition)
-      v    (set a volume label, repeat for each partition)
+      v    (set or correct a volume label, repeat for each partition)
       w    (write the upgraded boot code back to the file)
 
   Write the finished image to the hard disk (permanent -- no undo):
@@ -197,8 +199,8 @@ EXAMPLES
 MBR88 BOOT RECORD
 ================================================================================
 
-  MBR88 is a custom MBR for DOS compatable partitions.  It presents a boot
-  menu and always waits for the user to choose what to boot.  The menu 
+  MBR88 is a custom MBR for DOS compatible partitions.  It presents a boot
+  menu and always waits for the user to choose what to boot.  The menu
   supports hard disk partitions 1-4 and floppy drives A and B.
 
   Only bootable partitions appear in the menu.  MBR88 allows more than one
@@ -212,8 +214,10 @@ MBR88 BOOT RECORD
   reporting an error, which allows floppy drive motors time to reach
   stable speed.
 
-  MBR88 is identified by the signature 'mbr88' at MBR offset 0x1B8,
-  followed by a version byte at 0x1BD.  Version 01 = v0.2.
+  MBR88 v0.2 is identified by the signature 'mbr88' at MBR offset 0x1B2,
+  followed by a version byte 0x02 at 0x1B7.  The NT/OS2 disk signature
+  region at 0x1B8-0x1BB is left clear, so Windows NT and OS/2 can write
+  their disk identifiers without conflicting with the mbr88 boot record.
 
   Boot menu labels are stored at MBR offset 0x41 in four 16-byte slots.
   Each slot holds up to 11 characters displayed next to the partition
@@ -260,5 +264,5 @@ AUTHOR
 ================================================================================
 
   Chris Piker with the assistance of Claude (Anthropic)
-  MIT License -- Copyright (c) 2025 Chris Piker.
+  MIT License -- Copyright (c) 2026 Chris Piker.
 ================================================================================

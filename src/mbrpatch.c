@@ -24,9 +24,9 @@
  */
 
 /* AI Disclosure:
- *   This code was generated in cooperation with Claude, which is an 
- *   Artificial Intelligence service provided by Anthropic. Though 
- *   development was orchestrated by a human, reviewed by a human, and 
+ *   This code was generated in cooperation with Claude, which is an
+ *   Artificial Intelligence service provided by Anthropic. Though
+ *   development was orchestrated by a human, reviewed by a human, and
  *   tested by a human, the majority of the code was composed by an AI.
  *
  *   It is completely reasonable to forbid AI generated software in some
@@ -186,7 +186,7 @@ static const char *type_name(unsigned char t)
 	return "Unknown";
 }
 
-/* Print partition type list in two columns, no 0x prefix -- the 't' command
+/* Print partition type list in two columns, no 0x prefix -- the 'l' command
  * calls this.  Any value 00-FF is accepted by the type prompt; entries not
  * in this table display as "Unknown" in the partition summary. */
 static void print_type_hints(void)
@@ -297,20 +297,96 @@ static unsigned char mbr88_version(void)
 }
 
 /* Return 1 if label editing is supported for the loaded MBR.
- * Label slot format is only understood for the mbr88 version
- * MBR88_VER_BYTE. Future ones are not unsupported; the caller
- * should direct the user to get a newer mbrpatch. */
+ * Label slot format is defined for MBR88_VER_BYTE.  Future versions
+ * are not supported by this build; the caller should direct the user
+ * to get a newer mbrpatch. */
 static int labels_supported(void)
 {
 	return detect_mbr88() && (mbr88_version() == MBR88_VER_BYTE);
 }
 
+/*
+ * is_valid_label_slot -- check whether a 16-byte label slot contains a
+ * plausible mbr88 label, without relying on the mbr88 signature being
+ * present (used during -u upgrade to recover labels from any mbr88 image).
+ *
+ * A valid slot contains:
+ *   - 1 to MBR88_LABEL_MAX printable ASCII bytes (0x20-0x7E)
+ *   - immediately followed by CR (0x0D) then LF (0x0A) then NUL (0x00)
+ *   - all remaining bytes through slot[MBR88_LABEL_SLOT_SZ-1] are 0x00
+ *
+ * This pattern is tight enough that random boot code bytes are extremely
+ * unlikely to pass.  If a false positive does occur the user can simply
+ * correct the label during the interactive session.
+ */
+static int is_valid_label_slot(const unsigned char *slot)
+{
+	int i;
+
+	/* Scan printable ASCII run; must be at least 1 byte */
+	for (i = 0; i < MBR88_LABEL_MAX; i++) {
+		if (slot[i] == 0x0D) break;          /* CR ends the text run */
+		if (slot[i] < 0x20 || slot[i] > 0x7E)
+			return 0;                         /* non-printable, not a label */
+	}
+	if (i == 0) return 0;                     /* zero-length label, not valid */
+
+	/* CR LF NUL must follow immediately */
+	if (slot[i]   != 0x0D) return 0;
+	if (slot[i+1] != 0x0A) return 0;
+	if (slot[i+2] != 0x00) return 0;
+
+	/* Everything after the NUL must be zero padding */
+	for (i = i + 3; i < MBR88_LABEL_SLOT_SZ; i++)
+		if (slot[i] != 0x00) return 0;
+
+	return 1;
+}
+
+/*
+ * upgrade_to_mbr88 -- replace boot code with the mbr88 v0.2 template,
+ * preserving the partition table and any recoverable label slots.
+ *
+ * Label recovery: the label area (MBR88_LABEL_BASE, 64 bytes) exists at
+ * the same offset in every mbr88 version.  Before overwriting, each slot
+ * is tested with is_valid_label_slot().  Slots that pass are copied back
+ * after the template is applied; slots that fail are left zeroed (the
+ * template default).  This correctly handles:
+ *   - Upgrading a v0.1 mbr88 image: labels recovered.
+ *   - Upgrading a generic MBR: label area contains code bytes that will
+ *     not pass the slot check, so labels are zeroed.
+ */
 static void upgrade_to_mbr88(void)
 {
 	unsigned char old_ptable[64];
+	unsigned char old_labels[64];
+	int           label_valid[NUM_ENTRIES];
+	int           i;
+
+	/* Save partition table */
 	memcpy(old_ptable, mbr + PTABLE_OFFSET, 64);
+
+	/* Save and validate each label slot independently */
+	memcpy(old_labels, mbr + MBR88_LABEL_BASE, 64);
+	for (i = 0; i < NUM_ENTRIES; i++)
+		label_valid[i] = is_valid_label_slot(
+			old_labels + i * MBR88_LABEL_SLOT_SZ);
+
+	/* Overwrite with fresh template (zeros label area and boot code) */
 	memcpy(mbr, MBR88_TEMPLATE, MBR_SIZE);
+
+	/* Restore partition table */
 	memcpy(mbr + PTABLE_OFFSET, old_ptable, 64);
+
+	/* Restore valid label slots; invalid slots remain zeroed from template */
+	for (i = 0; i < NUM_ENTRIES; i++) {
+		if (label_valid[i])
+			memcpy(
+				mbr + MBR88_LABEL_BASE + i * MBR88_LABEL_SLOT_SZ,
+				old_labels + i * MBR88_LABEL_SLOT_SZ,
+				MBR88_LABEL_SLOT_SZ
+			);
+	}
 }
 
 /* ***************************************************************************
@@ -428,7 +504,7 @@ static void fmt_size(char *buf, unsigned long sectors)
 
 static void col_row(char line[COL_WIDTH+1], const char *s)
 {
-	snprintf(line, COL_WIDTH+1, "%-*.*s", COL_WIDTH, COL_WIDTH, s);
+	snprintf(line, COL_WIDTH+1, "%-38.38s", s);
 }
 
 static void col_lines(int slot_1based, char lines[7][COL_WIDTH + 1])
@@ -868,7 +944,7 @@ static void print_help(void)
 
 static void print_help(void)
 {
-	puts("mbrpatch -- DOS and compatable MBR partition table viewer and editor");
+	puts("mbrpatch -- DOS compatible MBR partition table viewer and editor");
 	puts("");
 	puts("Usage:");
 	puts("  mbrpatch        <mbr_file>               View partition table and exit");
@@ -891,8 +967,9 @@ static void print_help(void)
 	puts("");
 	puts("  -u         Upgrade.  Replace the boot code of an existing MBR with");
 	puts("             the mbr88 v" MBR88_VER_STR " boot record, preserving the partition");
-	puts("             table entries.  The file must exist and be valid.  Label");
-	puts("             editing is always available after upgrade.");
+	puts("             table entries.  Existing MBR88 labels are recovered if");
+	puts("             the label slots contain valid data.  The file must exist");
+	puts("             and be valid.  Label editing is always available after upgrade.");
 	puts("");
 	puts("  -n         New.  Create a blank mbr88 v" MBR88_VER_STR " image from scratch.");
 	puts("             The target file must NOT exist (safety check).  Enters");
@@ -1312,7 +1389,8 @@ int main(int argc, char *argv[])
 			dirty = 1;   /* boot code was replaced -- treat as unsaved change */
 			puts("Upgrade: boot code replaced with mbr88 v" MBR88_VER_STR ", "
 				"partition table preserved.");
-			puts("  Use 'v' to set labels, 'w' to write when done.");
+			puts("  Any valid mbr88 labels found in the source image were recovered.");
+			puts("  Use 'v' to set or correct labels, 'w' to write when done.");
 		} else {
 			/* mode_patch: detect signature and version */
 			if (detect_mbr88()) {

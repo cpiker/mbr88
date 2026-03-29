@@ -45,8 +45,8 @@ reads, displays, and interactively edits the 512-byte Master Boot Record
 of an IBM XT-class hard disk image.
 It understands the standard four-entry MBR partition table and
 the extended boot menu label feature of the
-.B MBR88 v0.2
-boot record.
+.B MBR88
+v0.2 boot record.
 .PP
 It can also read the MBR directly from a physical disk device or write
 a prepared image back to disk, removing the need for out-of-band tools
@@ -93,6 +93,8 @@ boot menu label editing is also available.
 Validates the file, replaces its boot code with the
 .B MBR88 v0.2
 boot record, and preserves the existing partition table entries.
+Existing label slots are recovered if they contain valid mbr88 label data;
+slots that do not pass the validity check are zeroed.
 The file must already exist; use
 .B \-n
 to create a new image from scratch.
@@ -218,10 +220,10 @@ It supports hard disk partitions 1 through 4 and floppy drives A and B.
 Only partitions with status byte
 .B 0x80
 appear in the
-.B mbr88
+.B MBR88
 boot menu.
 Unlike conventional single-boot MBR loaders,
-.B mbr88
+.B MBR88
 permits more than one partition to be marked bootable
 simultaneously; all marked partitions will appear in the menu.
 Use the
@@ -236,21 +238,29 @@ After running such tools it is necessary to re-run
 to restore the bootable flag on any additional boot partitions.
 .PP
 The
-.B mbr88
+.B MBR88
 boot record is identified by the five-byte ASCII signature
 .B mbr88
 at MBR offset
-.BR 0x1B8 ,
+.BR 0x1B2 ,
 followed by a version byte at
-.BR 0x1BD .
-Version
-.B 0x01
+.BR 0x1B7 .
+Version byte
+.B 0x02
 corresponds to
 .BR v0.2 .
 .PP
+The NT/OS2 disk signature region at offsets
+.B 0x1B8\-0x1BB
+is intentionally left clear by
+.BR MBR88 .
+This allows Windows NT and OS/2 to install a disk signature without
+conflicting with the mbr88 boot record, improving compatibility with
+286-class hardware and NT-family operating systems.
+.PP
 When an
-.B mbr88 v0.2
-image is loaded, four 16-byte label slots at offset
+.B MBR88 v0.2
+image is loaded, four 16-byte volume label slots at offset
 .B 0x41
 become editable via the
 .B v
@@ -297,7 +307,7 @@ to set geometry,
 .B b
 to mark bootable partitions,
 .B v
-to add labels, then
+to add or correct labels, then
 .B w
 to write.
 .PP
