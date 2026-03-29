@@ -169,7 +169,7 @@ static const TypeName TYPE_NAMES[] = {
 	{ 0x1C, "Hidden FAT32 LBA" },
 	{ 0x1E, "Hidden FAT16 LBA" },
 	{ 0x64, "NetWare 286"      },
-	{ 0x80, "MINIX orig/ELKS"  },
+	{ 0x80, "ELKS/Old MINIX"   },
 	{ 0x81, "MINIX"            },
 	{ 0x82, "Linux swap"       },
 	{ 0x83, "Linux"            },
