@@ -76,8 +76,32 @@
  *   Bytes 12-15  LBA size  (32-bit little-endian)
  */
 
+/* FILE SECTION INDEX -- grep for the tag to jump to that section
+ *
+ *   SEC:PORTABILITY      #ifdef portability block and includes
+ *   SEC:TEMPLATE         mbr88 template include and size check
+ *   SEC:CONSTANTS        #define constants
+ *   SEC:GLOBALS          Session-state global variables
+ *   SEC:TYPETABLE        Partition type name table and lookup
+ *   SEC:CHS              CHS pack/unpack/to-LBA helpers
+ *   SEC:LABELS           Label slot build/read/write helpers
+ *   SEC:MBR88DETECT      mbr88 signature detection and upgrade
+ *   SEC:HOSTILEDETECT    Hostile MBR detection (GPT block, GRUB/LILO warn)
+ *   SEC:FILEIO           copy_file, load_and_validate
+ *   SEC:INPUT            read_line, ask_int, ask_hex, ask_yn, read_diskid,
+ *                        ask_slot
+ *   SEC:DISPLAY          Two-column table display, print_table_gpt,
+ *                        print_table
+ *   SEC:DISKID           diskid_is_zero, wpflag_is_set, fmt_diskid,
+ *                        gen_disk_id, offer_diskid
+ *   SEC:COMMANDS         cmd_geometry through cmd_help
+ *   SEC:HELPTEXT         print_help (full and minimal variants)
+ *   SEC:DISKIO           disk_read_mbr, disk_write_mbr (platform-specific)
+ *   SEC:MAIN             main()
+ */
+
 /* ***************************************************************************
- * Portability: POSIX (gcc & ia16-elf-gcc) vs Open Watcom
+ * SEC:PORTABILITY -- conditional includes for POSIX vs Open Watcom
  */
 #ifdef __WATCOMC__
 #	include <io.h>
@@ -100,7 +124,7 @@
 #include <string.h>
 
 /* ***************************************************************************
- * mbr88 blank template -- included from generated header
+ * SEC:TEMPLATE -- mbr88 blank template, included from generated header
  */
 
 #include "mbr88.h"
@@ -111,7 +135,7 @@ typedef char mbr_size_check_[
 ];
 
 /* ***************************************************************************
- * Constants
+ * SEC:CONSTANTS
  */
 
 #define MBR_SIZE          512
@@ -130,8 +154,18 @@ typedef char mbr_size_check_[
 #define DEFAULT_HEADS     16
 #define DEFAULT_SECTORS   17
 
+/* MBR metadata region (standard MBR fields, not mbr88-specific)
+ *   0x1B8-0x1BB  32-bit disk ID (little-endian)
+ *   0x1BC-0x1BD  write-protect flag: 0x0000=normal, 0x5A5A=read-only hint
+ * These fields are managed by the 'm' command and preserved across upgrades. */
+#define DISKID_OFFSET     0x1B8
+#define DISKID_LEN        4
+#define WPFLAG_OFFSET     0x1BC
+#define WPFLAG_LEN        2
+#define WPFLAG_SET        0x5A5A
+
 /* ***************************************************************************
- * Session state globals
+ * SEC:GLOBALS -- session state; all interactive modes share these
  */
 
 static unsigned char mbr[MBR_SIZE];
@@ -143,7 +177,7 @@ static int           geo_heads;
 static int           geo_sectors;
 
 /* ***************************************************************************
- * Partition type table
+ * SEC:TYPETABLE -- partition type name table and lookup
  */
 
 typedef struct { unsigned char type; const char *name; } TypeName;
@@ -214,7 +248,7 @@ static void print_type_hints(void)
 }
 
 /* ***************************************************************************
- * CHS helpers
+ * SEC:CHS -- pack/unpack CHS fields and convert CHS to LBA
  */
 
 static void pack_chs(unsigned char out[3], int cyl, int head, int sector)
@@ -239,7 +273,7 @@ static unsigned long chs_to_lba(int cyl, int head, int sector)
 }
 
 /* ***************************************************************************
- * Label slot helpers
+ * SEC:LABELS -- build, read, and write mbr88 boot menu label slots
  */
 
 static void build_label_slot(unsigned char slot[MBR88_LABEL_SLOT_SZ],
@@ -278,7 +312,7 @@ static void write_label(int slot_0based, const char *text)
 }
 
 /* ***************************************************************************
- * mbr88 detection and upgrade
+ * SEC:MBR88DETECT -- signature detection, version check, upgrade to mbr88
  */
 
 static int detect_mbr88(void)
@@ -309,8 +343,14 @@ static int labels_supported(void)
  * but hostile_write_ok needs it at the point of the detection block. */
 static int ask_yn(const char *prompt);
 
+/* Forward declarations -- diskid/wpflag helpers are defined after the
+ * upgrade block, but print_table() calls them from the status bar. */
+static int  diskid_is_zero(void);
+static int  wpflag_is_set(void);
+static void fmt_diskid(char *buf);
+
 /* ***************************************************************************
- * Hostile MBR detection
+ * SEC:HOSTILEDETECT -- GPT block, GRUB/LILO warn, hostile_write_ok guard
  *
  * Checks run after every MBR load (file or device) before any other
  * processing.  Three response tiers:
@@ -530,11 +570,18 @@ static void upgrade_to_mbr88(void)
 {
 	unsigned char old_ptable[64];
 	unsigned char old_labels[64];
+	unsigned char old_diskid[DISKID_LEN];    /* 0x1B8-0x1BB: disk ID         */
+	unsigned char old_wpflag[WPFLAG_LEN];    /* 0x1BC-0x1BD: write-prot flag  */
 	int           label_valid[NUM_ENTRIES];
 	int           i;
 
 	/* Save partition table */
 	memcpy(old_ptable, mbr + PTABLE_OFFSET, 64);
+
+	/* Save metadata fields -- preserved across the template copy so that an
+	 * upgrade on a disk that already has an ID does not silently clear it. */
+	memcpy(old_diskid, mbr + DISKID_OFFSET, DISKID_LEN);
+	memcpy(old_wpflag, mbr + WPFLAG_OFFSET, WPFLAG_LEN);
 
 	/* Save and validate each label slot independently */
 	memcpy(old_labels, mbr + MBR88_LABEL_BASE, 64);
@@ -548,6 +595,10 @@ static void upgrade_to_mbr88(void)
 	/* Restore partition table */
 	memcpy(mbr + PTABLE_OFFSET, old_ptable, 64);
 
+	/* Restore metadata fields */
+	memcpy(mbr + DISKID_OFFSET, old_diskid, DISKID_LEN);
+	memcpy(mbr + WPFLAG_OFFSET, old_wpflag, WPFLAG_LEN);
+
 	/* Restore valid label slots; invalid slots remain zeroed from template */
 	for (i = 0; i < NUM_ENTRIES; i++) {
 		if (label_valid[i])
@@ -560,7 +611,7 @@ static void upgrade_to_mbr88(void)
 }
 
 /* ***************************************************************************
- * File I/O
+ * SEC:FILEIO -- copy_file, load_and_validate
  */
 
 static int copy_file(const char *src, const char *dst)
@@ -580,7 +631,7 @@ static int copy_file(const char *src, const char *dst)
 }
 
 /* ***************************************************************************
- * Input helpers
+ * SEC:INPUT -- read_line, ask_int, ask_hex, ask_yn, read_diskid, ask_slot
  */
 
 static int read_line(char *buf, int len)
@@ -638,6 +689,68 @@ static int ask_yn(const char *prompt)
 	}
 }
 
+/*
+ * read_diskid -- prompt for a 32-bit disk ID entered as up to 8 hex digits.
+ *
+ * Accepts any string of 1-8 hex characters (0-9, a-f, A-F), with or without
+ * a leading 0x prefix or a trailing 'h' suffix.  Spaces are ignored so the
+ * user can type "1111 1110" the same way fdisk displays it.  The value is
+ * stored little-endian at mbr[DISKID_OFFSET..+3].
+ *
+ * Returns 1 on success, 0 if the input contained non-hex characters or was
+ * empty after stripping whitespace and prefix/suffix.
+ */
+static int read_diskid(void)
+{
+	char raw[16];
+	char hex[10];  /* up to 8 hex digits + NUL */
+	int  hlen, i;
+	unsigned long val;
+	char *p;
+
+	printf("  Enter disk ID (up to 8 hex digits, spaces ok): ");
+	fflush(stdout);
+	if (!read_line(raw, sizeof(raw))) return 0;
+
+	/* Strip spaces */
+	hlen = 0;
+	for (p = raw; *p && hlen < 9; p++) {
+		if (*p == ' ' || *p == '\t') continue;
+		hex[hlen++] = *p;
+	}
+	hex[hlen] = '\0';
+
+	/* Strip optional 0x prefix */
+	p = hex;
+	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+		p += 2;
+		hlen -= 2;
+	}
+
+	/* Strip optional trailing h */
+	if (hlen > 0 && (p[hlen-1] == 'h' || p[hlen-1] == 'H')) {
+		p[--hlen] = '\0';
+	}
+
+	if (hlen == 0 || hlen > 8) return 0;
+
+	/* Validate: all remaining chars must be hex digits */
+	for (i = 0; i < hlen; i++) {
+		char c = p[i];
+		if (!((c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F')))
+			return 0;
+	}
+
+	val = strtoul(p, NULL, 16);
+
+	/* Store little-endian */
+	mbr[DISKID_OFFSET]   = (unsigned char)( val        & 0xFF);
+	mbr[DISKID_OFFSET+1] = (unsigned char)((val >>  8) & 0xFF);
+	mbr[DISKID_OFFSET+2] = (unsigned char)((val >> 16) & 0xFF);
+	mbr[DISKID_OFFSET+3] = (unsigned char)((val >> 24) & 0xFF);
+	return 1;
+}
+
 static int ask_slot(const char *prompt)
 {
 	char buf[8];
@@ -649,7 +762,7 @@ static int ask_slot(const char *prompt)
 }
 
 /* ***************************************************************************
- * Two-column display helpers
+ * SEC:DISPLAY -- two-column table layout, print_table_gpt, print_table
  */
 
 static int is_empty(int slot_0based)
@@ -910,11 +1023,171 @@ static void print_table(void)
 	if (hostile_loader == HOSTILE_WARN)
 		printf("  Warning: MBR contains %s.\n", hostile_desc);
 
+	/* Disk ID and write-protect -- suppress both lines when both are zero
+	 * (clean XT disk with no utilities having touched the metadata region). */
+	{
+		int show_id = !diskid_is_zero();
+		int show_wp = wpflag_is_set();
+		if (show_id || show_wp) {
+			if (show_id) {
+				char idbuf[10];
+				fmt_diskid(idbuf);
+				printf("  Disk ID: %s", idbuf);
+				if (show_wp) printf("    Write-protect: SET");
+				putchar('\n');
+			} else {
+				printf("  Write-protect: SET\n");
+			}
+		}
+	}
+
 	putchar('\n');
 }
 
 /* ***************************************************************************
- * Command implementations
+ * SEC:DISKID -- disk ID and write-protect flag helpers
+ */
+
+/*
+ * diskid_is_zero -- return 1 if the disk ID field is all zeros.
+ * Used to decide whether to show "(not set)" and whether to offer
+ * auto-generation on -n / -u entry.
+ */
+static int diskid_is_zero(void)
+{
+	int i;
+	for (i = 0; i < DISKID_LEN; i++)
+		if (mbr[DISKID_OFFSET + i] != 0) return 0;
+	return 1;
+}
+
+/*
+ * wpflag_is_set -- return 1 if the write-protect flag equals 0x5A5A.
+ */
+static int wpflag_is_set(void)
+{
+	return (mbr[WPFLAG_OFFSET]   == 0x5A)
+	    && (mbr[WPFLAG_OFFSET+1] == 0x5A);
+}
+
+/*
+ * fmt_diskid -- format the four disk ID bytes as "XXXX XXXX" into buf.
+ * buf must be at least 10 bytes.
+ */
+static void fmt_diskid(char *buf)
+{
+	sprintf(buf, "%02X%02X %02X%02X",
+		mbr[DISKID_OFFSET+3], mbr[DISKID_OFFSET+2],
+		mbr[DISKID_OFFSET+1], mbr[DISKID_OFFSET]);
+}
+
+/*
+ * gen_disk_id -- fill mbr[DISKID_OFFSET..+3] with a generated disk ID.
+ *
+ * On Linux (native): reads 4 bytes from /dev/urandom.  This gives adequate
+ * collision avoidance for the intended use (a few disks owned by one user).
+ *
+ * On ELKS (ia16-elf-gcc / __ia16__): reads the BIOS tick counter via
+ * INT 1Ah/00h.  The counter increments ~18.2 times per second from power-on.
+ * We XOR the high and low halves of the 32-bit tick count together and XOR
+ * again with a fixed constant to make the result less boring for fresh boots.
+ * Not cryptographic, but plenty of entropy for distinguishing a handful of
+ * disks.
+ *
+ * On FreeDOS (Open Watcom / __WATCOMC__): same BIOS tick approach using
+ * _bios_timeofday() from <bios.h> -- no inline assembly needed.
+ *
+ * Returns 1 on success, 0 on failure (e.g. /dev/urandom unavailable).
+ */
+static int gen_disk_id(void)
+{
+#if defined(__WATCOMC__)
+
+	/* FreeDOS: use BIOS time-of-day tick counter via Open Watcom <bios.h>.
+	 * _bios_timeofday(_TIME_GETCLOCK, &ticks) stores the 32-bit tick count
+	 * in the low unsigned long and returns 0 normally (1 = midnight rollover,
+	 * which is harmless here).  We split the 32-bit value and XOR the halves
+	 * for a 32-bit ID with somewhat unpredictable bit patterns. */
+	{
+		unsigned long ticks = 0;
+		unsigned long hi, lo, id;
+		_bios_timeofday(_TIME_GETCLOCK, &ticks);
+		hi = (ticks >> 16) & 0xFFFF;
+		lo = ticks & 0xFFFF;
+		id = ((hi ^ 0xA55A) << 16) | (lo ^ 0x5AA5);
+		mbr[DISKID_OFFSET]   = (unsigned char)(id & 0xFF);
+		mbr[DISKID_OFFSET+1] = (unsigned char)((id >>  8) & 0xFF);
+		mbr[DISKID_OFFSET+2] = (unsigned char)((id >> 16) & 0xFF);
+		mbr[DISKID_OFFSET+3] = (unsigned char)((id >> 24) & 0xFF);
+		return 1;
+	}
+
+#elif defined(__ia16__)
+
+	/* ELKS: inline assembly for INT 1Ah/00h (read timer tick count).
+	 * On return: CX = high word, DX = low word of 32-bit tick count.
+	 * We XOR the halves and fold in a constant to spread the bits. */
+	{
+		unsigned int tick_hi, tick_lo;
+		unsigned long id;
+		__asm__ __volatile__ (
+			"int $0x1A"
+			: "=c" (tick_hi), "=d" (tick_lo)
+			: "0" (0), "1" (0), "a" (0x0000)
+			: "bx"
+		);
+		id = ((unsigned long)(tick_hi ^ 0xA55A) << 16)
+		   | ((unsigned long)(tick_lo ^ 0x5AA5) & 0xFFFF);
+		mbr[DISKID_OFFSET]   = (unsigned char)(id & 0xFF);
+		mbr[DISKID_OFFSET+1] = (unsigned char)((id >>  8) & 0xFF);
+		mbr[DISKID_OFFSET+2] = (unsigned char)((id >> 16) & 0xFF);
+		mbr[DISKID_OFFSET+3] = (unsigned char)((id >> 24) & 0xFF);
+		return 1;
+	}
+
+#else
+
+	/* Linux (native): read 4 bytes from /dev/urandom.
+	 * This is the best available entropy source on a full Linux system. */
+	{
+		int fd, n;
+		fd = open("/dev/urandom", O_RDONLY);
+		if (fd < 0) return 0;
+		n = read(fd, mbr + DISKID_OFFSET, DISKID_LEN);
+		close(fd);
+		return (n == DISKID_LEN) ? 1 : 0;
+	}
+
+#endif
+}
+
+/*
+ * offer_diskid -- prompt the user to generate a disk ID when none is set.
+ * Called on -n and -u entry if the disk ID field is zero.
+ * Sets dirty if the user accepts.
+ */
+static void offer_diskid(void)
+{
+	if (!diskid_is_zero()) return;
+
+	printf("  No disk ID set.  Disk IDs help utilities identify this disk\n");
+	printf("  and are harmless on XT-class hardware.\n");
+	if (ask_yn("  Generate one now? (Y/N): ")) {
+		if (gen_disk_id()) {
+			char buf[10];
+			fmt_diskid(buf);
+			printf("  Disk ID set to %s.\n", buf);
+			dirty = 1;
+		} else {
+			printf("  Could not generate a disk ID (entropy source unavailable).\n");
+		}
+	}
+}
+
+/* ***************************************************************************
+ * SEC:COMMANDS -- cmd_geometry, cmd_new, cmd_delete, cmd_set_type,
+ *                cmd_bootable, cmd_label, cmd_metadata, cmd_types,
+ *                cmd_write, cmd_help
  */
 
 static void cmd_geometry(void)
@@ -1113,6 +1386,119 @@ static void cmd_label(void)
 	printf("  Partition %d label set to '%s'.\n", slot, label_buf);
 }
 
+/*
+ * cmd_metadata -- 'm' command: manage disk ID (0x1B8-0x1BB) and
+ * write-protect flag (0x1BC-0x1BD).
+ *
+ * These fields live in the standard MBR region and are available for
+ * editing regardless of whether the mbr88 signature is present.  The
+ * disk ID is a 32-bit collision-avoidance identifier used by disk
+ * utilities; the write-protect flag is a hint (rarely enforced) that
+ * the disk is read-only.
+ *
+ * The submenu is context-sensitive: (S)et and (C)lear are shown only
+ * when relevant to the current flag state, to avoid presenting a no-op.
+ * (E)nter allows the user to set a specific disk ID value directly,
+ * which is useful when a recognizable or meaningful value is desired.
+ */
+static void cmd_metadata(void)
+{
+	char buf[8];
+	char idbuf[10];
+	int  wp;
+
+	for (;;) {
+		/* Show current state */
+		printf("\n");
+		if (diskid_is_zero())
+			printf("  Disk ID      : not set\n");
+		else {
+			fmt_diskid(idbuf);
+			printf("  Disk ID      : %s\n", idbuf);
+		}
+		wp = wpflag_is_set();
+		printf("  Write-protect: %s\n", wp ? "SET" : "not set");
+		printf("\n");
+
+		/* Context-sensitive submenu */
+		printf("  (G) Generate new disk ID\n");
+		printf("  (E) Enter disk ID manually\n");
+		printf("  (Z) Zero the disk ID\n");
+		if (!wp)
+			printf("  (S) Set write-protect\n");
+		else
+			printf("  (C) Clear write-protect\n");
+		printf("  (K) Keep / exit\n");
+		printf("  Choice: "); fflush(stdout);
+
+		if (!read_line(buf, sizeof(buf))) break;
+		if (!buf[0]) continue;
+
+		switch (buf[0]) {
+		case 'g': case 'G':
+			if (gen_disk_id()) {
+				fmt_diskid(idbuf);
+				printf("  Disk ID set to %s.\n", idbuf);
+				dirty = 1;
+			} else {
+				printf("  Could not generate a disk ID (entropy source "
+					"unavailable).\n");
+			}
+			break;
+
+		case 'e': case 'E':
+			if (read_diskid()) {
+				fmt_diskid(idbuf);
+				printf("  Disk ID set to %s.\n", idbuf);
+				dirty = 1;
+			} else {
+				printf("  Invalid input -- enter up to 8 hex digits "
+					"(e.g. 11111110).\n");
+			}
+			break;
+
+		case 'z': case 'Z':
+			memset(mbr + DISKID_OFFSET, 0, DISKID_LEN);
+			printf("  Disk ID cleared.\n");
+			dirty = 1;
+			break;
+
+		case 's': case 'S':
+			if (wp) {
+				printf("  Write-protect is already set.  "
+					"Use 'C' to clear it.\n");
+			} else {
+				mbr[WPFLAG_OFFSET]   = 0x5A;
+				mbr[WPFLAG_OFFSET+1] = 0x5A;
+				printf("  Write-protect flag set (0x5A5A).\n");
+				dirty = 1;
+				wp = 1;
+			}
+			break;
+
+		case 'c': case 'C':
+			if (!wp) {
+				printf("  Write-protect is not set.  "
+					"Use 'S' to set it.\n");
+			} else {
+				mbr[WPFLAG_OFFSET]   = 0x00;
+				mbr[WPFLAG_OFFSET+1] = 0x00;
+				printf("  Write-protect flag cleared.\n");
+				dirty = 1;
+				wp = 0;
+			}
+			break;
+
+		case 'k': case 'K':
+			return;
+
+		default:
+			printf("  Unknown option '%c'.\n", buf[0]);
+			break;
+		}
+	}
+}
+
 static void cmd_types(void)
 {
 	printf("\n  Common partition type codes (enter hex without prefix):\n");
@@ -1186,6 +1572,8 @@ static void cmd_help(void)
 	printf("    t  Set the partition type byte\n");
 	printf("    b  Toggle the bootable flag (inactive / bootable)\n");
 	printf("    v  Set the boot menu volume label  (mbr88 images only)\n");
+	printf("    m  Set disk metadata (ID, write-protect); 'm' submenu allows\n");
+	printf("       generate, enter manually, zero, set/clear write-protect\n");
 	printf("    p  Print the partition table\n");
 	printf("    l  List common partition type codes\n");
 	printf("    w  Write changes to file\n");
@@ -1195,7 +1583,7 @@ static void cmd_help(void)
 }
 
 /* ***************************************************************************
- * Help text -- full version for native builds, minimal for target builds
+ * SEC:HELPTEXT -- print_help (full for native builds, minimal for targets)
  */
 
 #if defined(__ia16__) || defined(__WATCOMC__)
@@ -1221,7 +1609,7 @@ static void print_help(void)
 
 static void print_help(void)
 {
-	puts("mbrpatch -- DOS compatible MBR partition table viewer and editor");
+	puts("mbrpatch -- traditional MBR partition table viewer and editor");
 	puts("");
 	puts("Usage:");
 	puts("  mbrpatch        <mbr_file>               View partition table and exit");
@@ -1270,8 +1658,9 @@ static void print_help(void)
 	puts("  g  Set drive geometry       n  New / redefine partition");
 	puts("  d  Delete partition         t  Set partition type");
 	puts("  b  Toggle bootable flag     v  Set boot menu volume label");
-	puts("  p  Print table              l  List type codes");
-	puts("  w  Write to file            q  Quit");
+	puts("  m  Set disk metadata        p  Print table");
+	puts("  l  List type codes          w  Write to file");
+	puts("  q  Quit");
 	puts("");
 	puts("MBR88 bootable flag:");
 	puts("  mbr88 only shows bootable partitions in the boot menu.");
@@ -1284,6 +1673,23 @@ static void print_help(void)
 	puts("  boot menu next to the partition number.  They are only supported");
 	puts("  for mbr88 v" MBR88_VER_STR " images.  If a newer mbr88 version is detected, you'll");
 	puts("  need to get an updated mbrpatch from: https://github.com/cpiker/mbr88");
+	puts("");
+	puts("Disk metadata ('m' command):");
+	puts("  The 'm' command manages two standard MBR fields available on any");
+	puts("  traditional MBR disk, not just mbr88.  It works in all interactive");
+	puts("  modes (-p, -u, -n).");
+	puts("");
+	puts("  Disk ID (0x1B8-0x1BB): a 32-bit identifier used by disk utilities");
+	puts("  to track disks across reboots and drive letter changes.  It does");
+	puts("  not need to be cryptographically random -- just probably unique");
+	puts("  across the disks you own.  mbr88 leaves it clear by default.");
+	puts("  Submenu options: (G)enerate random ID, (E)nter a value manually,");
+	puts("  (Z)ero the ID.  On -n and -u entry, mbrpatch offers to generate");
+	puts("  one automatically if the field is empty.");
+	puts("");
+	puts("  Write-protect flag (0x1BC-0x1BD): a hint value of 0x5A5A marks");
+	puts("  the disk as read-only.  Rarely enforced by any tool in practice,");
+	puts("  but defined in the standard.  0x0000 = normal.");
 	puts("");
 	puts("Examples:");
 	puts("  mbrpatch mbr.bin                    view current partition table");
@@ -1298,7 +1704,7 @@ static void print_help(void)
 #endif /* __ia16__ || __WATCOMC__ */
 
 /* ***************************************************************************
- * Disk I/O -- read or write the first sector of a physical disk.
+ * SEC:DISKIO -- disk_read_mbr, disk_write_mbr (platform-specific)
  *
  * On Linux / ELKS the caller passes a device path string (/dev/sda etc.).
  * On FreeDOS (Open Watcom) the caller passes a BIOS drive number string
@@ -1463,7 +1869,7 @@ static int load_and_validate(void)
 }
 
 /* ***************************************************************************
- * Main
+ * SEC:MAIN
  */
 
 int main(int argc, char *argv[])
@@ -1654,6 +2060,7 @@ int main(int argc, char *argv[])
 		file_exists   = 0;
 		puts("New mbr88 v" MBR88_VER_STR " image (blank partition table).");
 		puts("  Use 'g' then 'n' to define partitions, 'v' for labels, 'w' to write.");
+		offer_diskid();
 		print_table();
 		/* fall through to command loop */
 	}
@@ -1682,6 +2089,7 @@ int main(int argc, char *argv[])
 				"partition table preserved.");
 			puts("  Any valid mbr88 labels found in the source image were recovered.");
 			puts("  Use 'v' to set or correct labels, 'w' to write when done.");
+			offer_diskid();
 		} else {
 			/* mode_patch: detect signature and version */
 			if (detect_mbr88()) {
@@ -1728,6 +2136,7 @@ int main(int argc, char *argv[])
 		case 't': case 'T':  cmd_set_type(); redraw=1; break;
 		case 'b': case 'B':  cmd_bootable(); redraw=1; break;
 		case 'v': case 'V':  cmd_label();    redraw=1; break;
+		case 'm': case 'M':  cmd_metadata(); redraw=1; break;
 		case 'p': case 'P':  print_table();            break;
 		case 'l': case 'L':  cmd_types();              break;
 		case 'w': case 'W':  cmd_write();    redraw=1; break;
