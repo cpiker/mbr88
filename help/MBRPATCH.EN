@@ -1,5 +1,5 @@
 ================================================================================
-MBRPATCH  --  MBR partition table viewer and editor
+MBRPATCH  --  traditional MBR partition table viewer and editor
 Part of the mbr88 project: https://github.com/cpiker/mbr88
 MIT License  Copyright (c) 2026 Chris Piker
 ================================================================================
@@ -7,9 +7,14 @@ MIT License  Copyright (c) 2026 Chris Piker
 DESCRIPTION
 
   mbrpatch reads, displays, and interactively edits the 512-byte Master
-  Boot Record of an IBM XT-class hard disk image.  It understands the
-  standard four-entry MBR partition table and the extended boot menu label
-  feature of the mbr88 v0.2 boot record.
+  Boot Record of a traditional MBR-partitioned hard disk.
+
+  The traditional MBR partition scheme was introduced with IBM PC DOS 2.0
+  in 1983 and remains in widespread use today.  It stores up to four
+  primary partition entries describing each partition by CHS address, type
+  byte, and LBA start and count.  mbrpatch understands this standard
+  partition table and also supports the extended boot menu label feature
+  of the mbr88 v0.2 boot record.
 
   It can also read the MBR directly from a physical disk or write a
   prepared MBR image back to disk, removing the need for out-of-band tools
@@ -62,10 +67,12 @@ MODES
     Validates the file, replaces its boot code with the mbr88 v0.2 boot
     record, and preserves the existing partition table entries.  Existing
     label slots are recovered if they contain valid mbr88 label data; slots
-    that do not pass the validity check are zeroed.  The file MUST already
-    exist.  Use -n to create a new image from scratch.  After the upgrade,
-    the session starts with unsaved changes flagged so the 'w' command will
-    immediately offer to write the upgraded boot code.
+    that do not pass the validity check are zeroed.  The disk ID and
+    write-protect flag at offsets 0x1B8-0x1BD are also preserved across
+    the upgrade.  The file MUST already exist.  Use -n to create a new
+    image from scratch.  After the upgrade, the session starts with unsaved
+    changes flagged so the 'w' command will immediately offer to write the
+    upgraded boot code.
 
   -n -- NEW MODE
 
@@ -123,6 +130,10 @@ INTERACTIVE COMMANDS
       Up to 11 characters.  Shown in the boot menu next to the
       partition number.
 
+  m   Manage disk metadata (disk ID and write-protect flag).
+      Available on any traditional MBR disk, not only mbr88 images.
+      See DISK METADATA below.
+
   p   Print the current partition table.
 
   l   List common partition type codes.
@@ -133,6 +144,74 @@ INTERACTIVE COMMANDS
   h   Print a short command summary.
 
   q   Quit.  Prompts if there are unsaved changes.
+
+================================================================================
+DISK METADATA ('m' command)
+================================================================================
+
+  The 'm' command manages two standard fields in the traditional MBR
+  region that are not part of the partition table itself.  These fields
+  are available for editing regardless of whether the mbr88 signature is
+  present, since they belong to the common MBR area.
+
+  DISK ID (offsets 0x1B8-0x1BB)
+
+    A 32-bit identifier used by operating systems and disk utilities to
+    track a disk across reboots and drive letter changes.  It does not
+    need to be cryptographically random -- just probably unique across the
+    disks on your machine.
+
+    mbr88 leaves this field clear in the template image.  On entering -n
+    or -u mode, mbrpatch will offer to generate a disk ID automatically
+    if the field is empty.
+
+    The 'm' submenu provides three options for the disk ID:
+
+      (G)  Generate a random disk ID using a platform entropy source.
+           On FreeDOS, the BIOS timer tick counter is used as the source.
+
+      (E)  Enter a specific disk ID value manually.  Type up to 8 hex
+           digits; spaces are accepted.  Example: 1111 1110
+           The value is stored and displayed little-endian, matching the
+           format used by fdisk and by mbrpatch itself.
+
+      (Z)  Zero the disk ID (marks it as not set).
+
+  WRITE-PROTECT FLAG (offsets 0x1BC-0x1BD)
+
+    A hint field.  The value 0x5A5A indicates the disk should be treated
+    as read-only.  This hint is defined in the traditional MBR
+    specification but is rarely enforced by operating systems or tools.
+    0x0000 is normal (read/write).
+
+    The 'm' submenu shows either (S)et or (C)lear depending on the
+    current state of the flag -- only the relevant option is displayed.
+
+  (K)eep exits the submenu without further changes.  Options are
+  independent; you can change the disk ID and leave the write-protect
+  flag alone, or vice versa.
+
+================================================================================
+HOSTILE MBR DETECTION
+================================================================================
+
+  mbrpatch inspects the boot code of every MBR it loads.
+
+  GPT DISKS (hard block)
+
+    If any partition entry has type 0xEE (GPT protective MBR), or if 0xEE
+    appears alongside non-empty entries (hybrid GPT/MBR), mbrpatch refuses
+    all write operations and displays a warning.
+
+    The real partition table on a GPT disk is at LBA 1 and is not visible
+    to mbrpatch.  Use a GPT-aware tool (gdisk, parted) for these disks.
+
+  GRUB / LILO (warning)
+
+    If the MBR contains GRUB Legacy, GRUB2, or LILO boot code, mbrpatch
+    displays a warning before any write operation and asks for
+    confirmation.  Upgrading will overwrite the existing boot loader and
+    the system may not boot until it is reinstalled.
 
 ================================================================================
 PARTITION TYPE CODES (common values)
@@ -148,7 +227,7 @@ PARTITION TYPE CODES (common values)
   07  HPFS/NTFS          1B  Hidden FAT32
   0A  OS/2 Boot Mgr      1C  Hidden FAT32 LBA
   64  NetWare 286        1E  Hidden FAT16 LBA
-  80  MINIX orig/ELKS    81  MINIX
+  80  ELKS/Old MINIX     81  MINIX
   82  Linux swap         83  Linux
   DB  CP/M-86
 
@@ -175,6 +254,7 @@ EXAMPLES
       g    (set geometry -- accept XT default or enter your values)
       b    (mark each bootable partition)
       v    (set or correct a volume label, repeat for each partition)
+      m    (set a disk ID if desired)
       w    (write the upgraded boot code back to the file)
 
   Write the finished image to the hard disk (permanent -- no undo):
@@ -190,6 +270,7 @@ EXAMPLES
       n    (define partition 1, repeat for each partition)
       b    (mark bootable partitions)
       v    (set volume labels)
+      m    (set a recognisable disk ID, e.g. enter 1111 1110)
       w    (write the new image to new.bin)
 
     Then write it to disk:
@@ -199,9 +280,10 @@ EXAMPLES
 MBR88 BOOT RECORD
 ================================================================================
 
-  MBR88 is a custom MBR for DOS compatible partitions.  It presents a boot
-  menu and always waits for the user to choose what to boot.  The menu
-  supports hard disk partitions 1-4 and floppy drives A and B.
+  MBR88 is a custom MBR for traditional MBR-partitioned disks.  It
+  presents a boot menu and always waits for the user to choose what to
+  boot.  The menu supports hard disk partitions 1-4 and floppy drives
+  A and B.
 
   Only bootable partitions appear in the menu.  MBR88 allows more than one
   partition to be bootable at once -- use the 'b' command in mbrpatch to
@@ -215,9 +297,11 @@ MBR88 BOOT RECORD
   stable speed.
 
   MBR88 v0.2 is identified by the signature 'mbr88' at MBR offset 0x1B2,
-  followed by a version byte 0x02 at 0x1B7.  The NT/OS2 disk signature
-  region at 0x1B8-0x1BB is left clear, so Windows NT and OS/2 can write
-  their disk identifiers without conflicting with the mbr88 boot record.
+  followed by a version byte 0x02 at 0x1B7.
+
+  The disk ID region (0x1B8-0x1BB) and write-protect flag (0x1BC-0x1BD)
+  are left clear in the MBR88 template so disk utilities can write their
+  own identifiers without conflicting with the mbr88 boot record.
 
   Boot menu labels are stored at MBR offset 0x41 in four 16-byte slots.
   Each slot holds up to 11 characters displayed next to the partition
