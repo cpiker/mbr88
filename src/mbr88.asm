@@ -144,6 +144,15 @@
 ;
 ; Binary layout (512 bytes):
 ;   0x000-0x002  Near jump over data area (E9 xx xx)
+;
+;   Note on the near jump at 0x000:
+;   A short jump (EB xx, 2 bytes) would technically fit here — the data
+;   area is exactly 126 bytes (0x003 through 0x080), which is one byte
+;   under the signed 8-bit limit of +127.  The near jump (E9 xx xx,
+;   3 bytes) was chosen for clarity and safety margin.  If a future
+;   version absolutely needs to reclaim 1 byte of code space, converting
+;   to a short jump is possible provided the data area has not grown.
+;   Check the data section size before making this change.
 ;   0x003-0x00A  str_boot_from: "Boot:\r\n\0" (8 bytes)
 ;   0x00B-0x01F  str_floppy_ab: "A Floppy\r\nB Floppy\r\n\0" (21 bytes)
 ;   0x020-0x02C  str_disk_err: "Read error\r\n\0" (13 bytes)
@@ -199,6 +208,8 @@ RDELTA  equ     6000h - 7C00h           ; = -0x1C00
 ; =============================================================================
 
         jmp     near start              ; 3-byte near jump over data area
+                                        ; (could save 1 byte with short jump
+                                        ; if ever critical -- see layout note)
 
 str_boot_from:
         db      'Boot:', 0Dh, 0Ah, 0    ; "Boot:\r\n\0"  8 bytes

@@ -305,6 +305,176 @@ static int labels_supported(void)
 	return detect_mbr88() && (mbr88_version() == MBR88_VER_BYTE);
 }
 
+/* Forward declaration -- ask_yn is defined after the input helpers below,
+ * but hostile_write_ok needs it at the point of the detection block. */
+static int ask_yn(const char *prompt);
+
+/* ***************************************************************************
+ * Hostile MBR detection
+ *
+ * Checks run after every MBR load (file or device) before any other
+ * processing.  Three response tiers:
+ *
+ *   HOSTILE_NONE    -- clean, proceed normally
+ *   HOSTILE_WARN    -- known third-party boot loader; warn before writes
+ *   HOSTILE_BLOCK   -- GPT or hybrid GPT; refuse all write operations
+ *
+ * Detection methods:
+ *
+ *   GPT protective MBR:
+ *     Any partition entry with type byte 0xEE indicates a GPT disk.
+ *     The real partition table is in LBA 1 and not visible here.
+ *     Writing anything risks corrupting the GPT header.
+ *     If 0xEE appears alongside other non-empty entries it is a hybrid
+ *     GPT/MBR, which is fragile and equally off-limits.
+ *
+ *   GRUB Legacy in MBR:
+ *     Byte 0 is 0xEB (short JMP) and the ASCII string "GRUB" appears
+ *     in the boot code area above the label region (0x81-0x1BD).
+ *     GRUB Legacy places the string at a fixed offset (~0x176-0x17B
+ *     depending on version) but scanning the full post-label code
+ *     region is more robust across versions and distro patches.
+ *
+ *   GRUB2 in MBR:
+ *     Byte 0 is 0xEB and byte 2 is 0x90 (the FAT BPB NOP convention
+ *     that GRUB2 boot.img deliberately mimics), but no "GRUB" string
+ *     appears in the boot code area (GRUB2 puts human-readable strings
+ *     in core.img, not in the 512-byte MBR sector).
+ *
+ *   LILO in MBR:
+ *     Byte 0 is 0xFA (CLI) and the ASCII string "LILO" appears at
+ *     the fixed offset 0x06-0x09 in every known LILO version.
+ *
+ * Note: mbr88 starts with 0xE9 (near JMP rel16), distinct from both
+ * 0xEB (GRUB/LILO short JMP) and 0xFA (LILO CLI).  No collision possible.
+ */
+
+#define HOSTILE_NONE   0   /* clean MBR, proceed normally                  */
+#define HOSTILE_WARN   1   /* known third-party loader, warn before writes  */
+#define HOSTILE_BLOCK  2   /* GPT/hybrid, refuse all write operations       */
+
+/* hostile_loader: set by detect_hostile_mbr(), read by write-path callers.
+ * Stored globally so print_table() and write commands can both see it
+ * without re-running detection. */
+static int hostile_loader = HOSTILE_NONE;
+
+/* hostile_desc: human-readable description set alongside hostile_loader. */
+static const char *hostile_desc = NULL;
+
+/*
+ * detect_hostile_mbr -- scan the global mbr[] buffer for hostile patterns.
+ *
+ * Sets hostile_loader and hostile_desc as a side effect.
+ * Returns HOSTILE_NONE / HOSTILE_WARN / HOSTILE_BLOCK.
+ *
+ * Called from load_and_validate() and from the -r post-read block.
+ * Safe to call multiple times; always re-evaluates from scratch.
+ */
+static int detect_hostile_mbr(void)
+{
+	int i;
+	int has_ee   = 0;   /* found a type-0xEE partition entry          */
+	int has_real = 0;   /* found a non-empty, non-0xEE entry alongside */
+
+	hostile_loader = HOSTILE_NONE;
+	hostile_desc   = NULL;
+
+	/* --- Tier 1: GPT protective / hybrid MBR --- */
+	for (i = 0; i < NUM_ENTRIES; i++) {
+		const unsigned char *e = mbr + PTABLE_OFFSET + i * ENTRY_SIZE;
+		unsigned char ptype = e[4];
+
+		if (ptype == 0xEE) {
+			has_ee = 1;
+		} else {
+			/* Entry is non-empty if any CHS/LBA/type field is set */
+			if (ptype != 0x00
+				|| e[1] || e[2] || e[3]
+				|| e[5] || e[6] || e[7]
+				|| e[8] || e[9] || e[10] || e[11])
+				has_real = 1;
+		}
+	}
+
+	if (has_ee && has_real) {
+		hostile_loader = HOSTILE_BLOCK;
+		hostile_desc   = "hybrid GPT/MBR";
+		return HOSTILE_BLOCK;
+	}
+	if (has_ee) {
+		hostile_loader = HOSTILE_BLOCK;
+		hostile_desc   = "GPT protective MBR";
+		return HOSTILE_BLOCK;
+	}
+
+	/* --- Tier 2: LILO --- */
+	/* LILO MBR: byte 0 is FA (CLI), "LILO" at fixed offset 0x06. */
+	if (mbr[0] == 0xFA
+		&& mbr[6]  == 'L' && mbr[7]  == 'I'
+		&& mbr[8]  == 'L' && mbr[9]  == 'O') {
+		hostile_loader = HOSTILE_WARN;
+		hostile_desc   = "LILO boot code";
+		return HOSTILE_WARN;
+	}
+
+	/* --- Tier 2: GRUB (Legacy and GRUB2) --- */
+	/* Both use EB xx at byte 0.  GRUB Legacy has "GRUB" in the code area
+	 * above the label region.  GRUB2 has no such string in the MBR sector
+	 * but uses EB xx 90 (the FAT BPB NOP convention). */
+	if (mbr[0] == 0xEB) {
+		/* Scan post-label boot code area for "GRUB" (Legacy) */
+		for (i = 0x81; i <= 0x1BD - 3; i++) {
+			if (mbr[i]   == 'G' && mbr[i+1] == 'R'
+				&& mbr[i+2] == 'U' && mbr[i+3] == 'B') {
+				hostile_loader = HOSTILE_WARN;
+				hostile_desc   = "GRUB Legacy boot code";
+				return HOSTILE_WARN;
+			}
+		}
+		/* No "GRUB" string: if byte 2 is 0x90 it is almost certainly GRUB2 */
+		if (mbr[2] == 0x90) {
+			hostile_loader = HOSTILE_WARN;
+			hostile_desc   = "GRUB2 boot code";
+			return HOSTILE_WARN;
+		}
+		/* EB xx without 0x90 at byte 2 and no GRUB string: some other
+		 * short-jump MBR loader.  Warn generically. */
+		hostile_loader = HOSTILE_WARN;
+		hostile_desc   = "unknown third-party boot loader (short-jump MBR)";
+		return HOSTILE_WARN;
+	}
+
+	return HOSTILE_NONE;
+}
+
+/*
+ * hostile_write_ok -- call before any write operation.
+ *
+ * HOSTILE_BLOCK: print error, return 0 (caller must abort).
+ * HOSTILE_WARN:  print warning, ask user to confirm, return their answer.
+ * HOSTILE_NONE:  return 1 silently.
+ */
+static int hostile_write_ok(void)
+{
+	if (hostile_loader == HOSTILE_BLOCK) {
+		fprintf(stderr,
+			"Error: this disk has a %s.\n"
+			"  mbrpatch is an MBR tool and knows better than to touch this.\n"
+			"  Backing away slowly.  Use a GPT-aware tool such as gdisk or parted.\n",
+			hostile_desc);
+		return 0;
+	}
+	if (hostile_loader == HOSTILE_WARN) {
+		printf(
+			"Warning: this MBR contains %s.\n"
+			"  Upgrading will overwrite the existing boot loader and the system\n"
+			"  may not boot until it is reinstalled.\n",
+			hostile_desc);
+		return ask_yn("Proceed anyway? (Y/N): ");
+	}
+	return 1;
+}
+
 /*
  * is_valid_label_slot -- check whether a 16-byte label slot contains a
  * plausible mbr88 label, without relying on the mbr88 signature being
@@ -567,6 +737,87 @@ static void col_lines(int slot_1based, char lines[7][COL_WIDTH + 1])
 	}
 }
 
+/*
+ * print_table_gpt -- collapsed display for GPT and hybrid GPT disks.
+ *
+ * A GPT protective MBR contains one partition entry of type 0xEE that
+ * spans the entire disk.  The CHS and LBA fields are stub values chosen
+ * by the GPT spec and carry no information useful to the user.  The real
+ * partition table lives at LBA 1 and is invisible to mbrpatch.
+ *
+ * Showing the raw 0xEE entry with CHS/LBA decoded would be actively
+ * misleading, so this function suppresses all those fields and replaces
+ * the normal table display with a brief explanation and a warning banner.
+ *
+ * For hybrid MBRs (0xEE alongside real entries) the real entries are
+ * shown normally because the user might need to see them, but the
+ * warning banner is more alarming.
+ */
+static void print_table_gpt(int is_hybrid)
+{
+	int n;
+	const char *title = is_hybrid
+		? "*** HYBRID GPT/MBR DISK -- DO NOT MODIFY ***"
+		: "*** GPT DISK -- READ ONLY ***";
+	int len  = (int)strlen(title);
+	int pad  = (LINE_WIDTH - len) / 2;
+	int rpad = LINE_WIDTH - len - pad;
+
+	for (n = 0; n < LINE_WIDTH; n++) putchar('=');
+	putchar('\n');
+	printf("%*s%s%*s\n", pad, "", title, rpad, "");
+	for (n = 0; n < LINE_WIDTH; n++) putchar('=');
+	putchar('\n');
+
+	if (is_hybrid) {
+		printf(
+			"  This disk has a hybrid GPT/MBR layout.  These are fragile.\n"
+			"  The real partition table is in LBA 1 (the GPT header).\n"
+			"  The MBR entries below may not match the GPT partition table.\n"
+			"  mbrpatch will not write to this disk.\n"
+			"  Use a GPT-aware tool such as gdisk or parted.\n");
+		for (n = 0; n < LINE_WIDTH; n++) putchar('-');
+		putchar('\n');
+		/* Show the real (non-0xEE) entries so the user can see what is there,
+		 * but label them clearly and suppress any bootable-flag tag. */
+		{
+			char left[7][COL_WIDTH+1];
+			char right[7][COL_WIDTH+1];
+			char gap[COL_GAP+1];
+			memset(gap, ' ', COL_GAP);
+			gap[COL_GAP] = '\0';
+			col_lines(1, left);
+			col_lines(2, right);
+			for (n = 0; n < 7; n++)
+				printf("%s%s%s\n", left[n], gap, right[n]);
+			for (n = 0; n < LINE_WIDTH; n++) putchar('-');
+			putchar('\n');
+			col_lines(3, left);
+			col_lines(4, right);
+			for (n = 0; n < 7; n++)
+				printf("%s%s%s\n", left[n], gap, right[n]);
+		}
+	} else {
+		/* Pure GPT protective MBR: one 0xEE entry, everything else zeroed.
+		 * Nothing useful to show from the partition table itself. */
+		printf(
+			"  This disk uses the GUID Partition Table (GPT) format.\n"
+			"  The MBR contains a single protective entry (type 0xEE)\n"
+			"  that reserves the entire disk.  The real partition table\n"
+			"  is at LBA 1 and is not visible here.\n"
+			"  mbrpatch will not write to this disk.\n"
+			"  Use a GPT-aware tool such as gdisk or parted.\n");
+	}
+
+	for (n = 0; n < LINE_WIDTH; n++) putchar('=');
+	putchar('\n');
+	{
+		const char *base = strrchr(mbr_path, '/');
+		base = base ? base + 1 : mbr_path;
+		printf("  File: %s  [%s]\n\n", base, hostile_desc);
+	}
+}
+
 static void print_table(void)
 {
 	char left[7][COL_WIDTH+1];
@@ -577,6 +828,23 @@ static void print_table(void)
 	char geo_buf[32];
 	char ver_buf[16];
 	int n, len, pad, rpad;
+
+	/* Delegate to collapsed GPT display for BLOCK-tier disks */
+	if (hostile_loader == HOSTILE_BLOCK) {
+		int is_hybrid = 0;
+		int i;
+		/* Hybrid: 0xEE present alongside at least one non-empty other entry */
+		for (i = 0; i < NUM_ENTRIES; i++) {
+			const unsigned char *e = mbr + PTABLE_OFFSET + i * ENTRY_SIZE;
+			if (e[4] != 0xEE
+				&& (e[4] || e[1] || e[2] || e[3]
+					|| e[5] || e[6] || e[7]
+					|| e[8] || e[9] || e[10] || e[11]))
+				is_hybrid = 1;
+		}
+		print_table_gpt(is_hybrid);
+		return;
+	}
 
 	memset(gap, ' ', COL_GAP);
 	gap[COL_GAP] = '\0';
@@ -632,11 +900,17 @@ static void print_table(void)
 		const char *base = strrchr(mbr_path, '/');
 		base = base ? base + 1 : mbr_path;
 		if (geo_buf[0])
-			printf("  File: %s  %s  %s\n\n", base, sig_tag, geo_buf);
+			printf("  File: %s  %s  %s\n", base, sig_tag, geo_buf);
 		else
-			printf("  File: %s  %s  Geometry: (use 'g' to set)\n\n",
+			printf("  File: %s  %s  Geometry: (use 'g' to set)\n",
 				base, sig_tag);
 	}
+
+	/* Warn about third-party boot loaders below the status bar */
+	if (hostile_loader == HOSTILE_WARN)
+		printf("  Warning: MBR contains %s.\n", hostile_desc);
+
+	putchar('\n');
 }
 
 /* ***************************************************************************
@@ -855,6 +1129,9 @@ static void cmd_write(void)
 		printf("  No changes to write.\n");
 		return;
 	}
+
+	if (!hostile_write_ok())
+		return;
 
 	/* No full redraw here -- the table was already shown after the last
 	 * modifying command.  Just confirm and write. */
@@ -1181,6 +1458,7 @@ static int load_and_validate(void)
 		return 1;
 	}
 	file_exists = 1;
+	detect_hostile_mbr();   /* sets hostile_loader / hostile_desc globals */
 	return 0;
 }
 
@@ -1282,6 +1560,7 @@ int main(int argc, char *argv[])
 				"  The sector will be saved as-is.\n");
 		}
 
+		detect_hostile_mbr();   /* sets hostile_loader / hostile_desc globals */
 		has_mbr88_sig = detect_mbr88();
 		print_table();
 
@@ -1316,6 +1595,9 @@ int main(int argc, char *argv[])
 
 		has_mbr88_sig = detect_mbr88();
 		print_table();
+
+		if (!hostile_write_ok())
+			return 1;
 
 		printf("  Target device : %s\n", disk_device);
 		printf("  This will OVERWRITE the first sector of that device.\n");
@@ -1383,7 +1665,16 @@ int main(int argc, char *argv[])
 		if (load_and_validate() != 0)
 			return 1;
 
+		/* Hard block for GPT/hybrid -- refuse interactive editing entirely */
+		if (hostile_loader == HOSTILE_BLOCK) {
+			print_table();   /* shows the GPT warning display */
+			return 1;
+		}
+
 		if (mode_upgrade) {
+			/* Warn about third-party loaders before overwriting their code */
+			if (!hostile_write_ok())
+				return 1;
 			upgrade_to_mbr88();
 			has_mbr88_sig = 1;
 			dirty = 1;   /* boot code was replaced -- treat as unsaved change */
