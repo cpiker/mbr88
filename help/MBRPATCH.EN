@@ -7,18 +7,14 @@ MIT License  Copyright (c) 2026 Chris Piker
 DESCRIPTION
 
   mbrpatch reads, displays, and interactively edits the 512-byte Master
-  Boot Record of a traditional MBR-partitioned hard disk.
+  Boot Record of a traditional MBR-partitioned hard disk.  The MBR
+  partition table format is compatible with everything from MS-DOS 2.0
+  (1983) through current Linux kernels; MBR88 boot records have been
+  tested on FreeDOS and ELKS.
 
-  The traditional MBR partition scheme was introduced with IBM PC DOS 2.0
-  in 1983 and remains in widespread use today.  It stores up to four
-  primary partition entries describing each partition by CHS address, type
-  byte, and LBA start and count.  mbrpatch understands this standard
-  partition table and also supports the extended boot menu label feature
-  of the mbr88 v0.2 boot record.
-
-  It can also read the MBR directly from a physical disk or write a
-  prepared MBR image back to disk, removing the need for out-of-band tools
-  like DEBUG.
+  It can read the MBR directly from a physical disk or write a prepared
+  MBR image back to disk, removing the need for out-of-band tools like
+  DEBUG.
 
   Changes to image files are always held in memory until you confirm a
   write with the 'w' command.  A backup copy (mbr_file.bak) is written
@@ -28,14 +24,16 @@ DESCRIPTION
   Device writes (-w) are permanent and have no automatic backup.  Always
   run mbrpatch -r first to save a copy of the existing MBR!
 
+  For partition table and MBR binary format reference, see MBR88FMT.EN.
+
 ================================================================================
 USAGE
 ================================================================================
 
   mbrpatch  <file>               View partition table of image file (read-only)
   mbrpatch  -p  <file>           Patch an existing MBR image interactively
-  mbrpatch  -u  <file>           Upgrade existing MBR image to mbr88, then edit
-  mbrpatch  -n  <file>           Create a new blank mbr88 image, then edit
+  mbrpatch  -u  <file>           Upgrade existing MBR image to MBR88, then edit
+  mbrpatch  -n  <file>           Create a new blank MBR88 image, then edit
   mbrpatch  -r  <file> <drive>   Read MBR from physical disk to image file
   mbrpatch  -w  <file> <drive>   Write MBR image file to physical disk
   mbrpatch  -h                   Print a short usage summary
@@ -58,15 +56,15 @@ MODES
   -p -- PATCH MODE
 
     Validates the file the same way as view mode, then opens an interactive
-    session for editing partitions.  If the file contains an mbr88 v0.2
-    boot record, boot menu label editing is also available.  A higher mbr88
+    session for editing partitions.  If the file contains an MBR88 v0.2
+    boot record, boot menu label editing is also available.  A higher MBR88
     version causes a message directing you to get a newer mbrpatch.
 
   -u -- UPGRADE MODE
 
-    Validates the file, replaces its boot code with the mbr88 v0.2 boot
+    Validates the file, replaces its boot code with the MBR88 v0.2 boot
     record, and preserves the existing partition table entries.  Existing
-    label slots are recovered if they contain valid mbr88 label data; slots
+    label slots are recovered if they contain valid MBR88 label data; slots
     that do not pass the validity check are zeroed.  The disk ID and
     write-protect flag at offsets 0x1B8-0x1BD are also preserved across
     the upgrade.  The file MUST already exist.  Use -n to create a new
@@ -76,7 +74,7 @@ MODES
 
   -n -- NEW MODE
 
-    Creates a blank mbr88 v0.2 image and opens the interactive session.
+    Creates a blank MBR88 v0.2 image and opens the interactive session.
     The target file MUST NOT already exist.  The program exits with an
     error if it does, preventing accidental overwrites.
 
@@ -122,16 +120,16 @@ INTERACTIVE COMMANDS
       built-in list display as "Unknown" in the partition summary.
 
   b   Toggle the bootable flag (inactive / bootable).
-      mbr88 only shows bootable partitions in the boot menu.
-      Unlike most MBR loaders, mbr88 allows more than one partition
+      MBR88 only shows bootable partitions in the boot menu.
+      Unlike most MBR loaders, MBR88 allows more than one partition
       to be bootable at once -- all such partitions appear in the menu.
 
-  v   Set the boot menu volume label for a partition (mbr88 v0.2 only).
+  v   Set the boot menu volume label for a partition (MBR88 v0.2 only).
       Up to 11 characters.  Shown in the boot menu next to the
       partition number.
 
   m   Manage disk metadata (disk ID and write-protect flag).
-      Available on any traditional MBR disk, not only mbr88 images.
+      Available on any traditional MBR disk, not only MBR88 images.
       See DISK METADATA below.
 
   p   Print the current partition table.
@@ -151,7 +149,7 @@ DISK METADATA ('m' command)
 
   The 'm' command manages two standard fields in the traditional MBR
   region that are not part of the partition table itself.  These fields
-  are available for editing regardless of whether the mbr88 signature is
+  are available for editing regardless of whether the MBR88 signature is
   present, since they belong to the common MBR area.
 
   DISK ID (offsets 0x1B8-0x1BB)
@@ -161,7 +159,7 @@ DISK METADATA ('m' command)
     need to be cryptographically random -- just probably unique across the
     disks on your machine.
 
-    mbr88 leaves this field clear in the template image.  On entering -n
+    MBR88 leaves this field clear in the template image.  On entering -n
     or -u mode, mbrpatch will offer to generate a disk ID automatically
     if the field is empty.
 
@@ -214,27 +212,6 @@ HOSTILE MBR DETECTION
     the system may not boot until it is reinstalled.
 
 ================================================================================
-PARTITION TYPE CODES (common values)
-================================================================================
-
-  00  Empty              0B  FAT32
-  01  FAT12              0C  FAT32 LBA
-  02  Xenix root         0E  FAT16 LBA
-  03  Xenix usr          0F  Extended LBA
-  04  FAT16 <32MB        11  Hidden FAT12
-  05  Extended           14  Hidden FAT16 <32MB
-  06  FAT16B >=32MB      16  Hidden FAT16B
-  07  HPFS/NTFS          1B  Hidden FAT32
-  0A  OS/2 Boot Mgr      1C  Hidden FAT32 LBA
-  64  NetWare 286        1E  Hidden FAT16 LBA
-  80  ELKS/Old MINIX     81  MINIX
-  82  Linux swap         83  Linux
-  DB  CP/M-86
-
-  Any value 00-FF is accepted.  Types not listed above display as
-  "Unknown" in the partition summary.
-
-================================================================================
 EXAMPLES
 ================================================================================
 
@@ -246,7 +223,7 @@ EXAMPLES
 
     mbrpatch original.bin
 
-  Upgrade the MBR to mbr88 v0.2, set labels, and write the image file:
+  Upgrade the MBR to MBR88 v0.2, set labels, and write the image file:
 
     mbrpatch -u original.bin
 
@@ -261,7 +238,7 @@ EXAMPLES
 
     mbrpatch -w original.bin 80h
 
-  Create a fresh mbr88 image from scratch:
+  Create a fresh MBR88 image from scratch:
 
     mbrpatch -n new.bin
 
@@ -275,40 +252,6 @@ EXAMPLES
 
     Then write it to disk:
       mbrpatch -w new.bin 80h
-
-================================================================================
-MBR88 BOOT RECORD
-================================================================================
-
-  MBR88 is a custom MBR for traditional MBR-partitioned disks.  It
-  presents a boot menu and always waits for the user to choose what to
-  boot.  The menu supports hard disk partitions 1-4 and floppy drives
-  A and B.
-
-  Only bootable partitions appear in the menu.  MBR88 allows more than one
-  partition to be bootable at once -- use the 'b' command in mbrpatch to
-  set the flag on each partition you want selectable.  Conventional tools
-  like FDISK enforce a single active partition; after running FDISK you
-  will need to re-run mbrpatch to restore the flags on additional boot
-  partitions.
-
-  The MBR88 boot record retries disk reads up to three times before
-  reporting an error, which allows floppy drive motors time to reach
-  stable speed.
-
-  MBR88 v0.2 is identified by the signature 'mbr88' at MBR offset 0x1B2,
-  followed by a version byte 0x02 at 0x1B7.
-
-  The disk ID region (0x1B8-0x1BB) and write-protect flag (0x1BC-0x1BD)
-  are left clear in the MBR88 template so disk utilities can write their
-  own identifiers without conflicting with the mbr88 boot record.
-
-  Boot menu labels are stored at MBR offset 0x41 in four 16-byte slots.
-  Each slot holds up to 11 characters displayed next to the partition
-  number in the boot menu.  Labels are only editable on MBR88 v0.2
-  images.  If a newer MBR88 version is found, get an updated mbrpatch:
-
-    https://github.com/cpiker/mbr88
 
 ================================================================================
 NOTES
@@ -325,8 +268,10 @@ NOTES
   will be wrong.  XT-class BIOSes use only the CHS fields and ignore LBA,
   so wrong LBA values rarely cause problems in practice.
 
-  CHS values should be taken from fdisk or the drive's technical
-  specification.
+  Bootable flag and FDISK: Conventional tools like FDISK enforce a single
+  active partition.  After running FDISK you will need to re-run mbrpatch
+  to restore the bootable flag on any additional partitions you want
+  visible in the MBR88 menu.
 
 ================================================================================
 FILES
@@ -335,11 +280,15 @@ FILES
   mbr_file.bak    Backup of the image file, written before any file write.
                   No automatic backup is made for device writes (-w).
 
+  MBR88FMT.EN     Binary format reference for the MBR partition table and
+                  MBR88 extensions.
+
 ================================================================================
 SEE ALSO
 ================================================================================
 
-  FDISK.EXE -- FreeDOS partition editor
+  MBR88FMT.EN -- partition table and MBR88 binary format reference
+  FDISK.EXE   -- FreeDOS partition editor
   mbr88 project: https://github.com/cpiker/mbr88
   compatibility.md -- notes on OS coexistence for multi-boot setups
 
@@ -347,6 +296,6 @@ SEE ALSO
 AUTHOR
 ================================================================================
 
-  Chris Piker with the assistance of Claude (Anthropic)
+  Chris Piker and Claude (Anthropic)
   MIT License -- Copyright (c) 2026 Chris Piker.
 ================================================================================

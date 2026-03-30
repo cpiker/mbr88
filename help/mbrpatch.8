@@ -5,7 +5,7 @@
 .\" Install: cp mbrpatch.8 /usr/share/man/man8/
 .\"          gzip /usr/share/man/man8/mbrpatch.8
 .\"
-.TH MBRPATCH 8 "2026" "mbr88 v0.2" "System Administration"
+.TH MBRPATCH 8 "2026" "MBR88 v0.2" "System Administration"
 .\"
 .\" -------------------------------------------------------------------------
 .SH NAME
@@ -43,22 +43,17 @@ mbrpatch \- view, edit, and transfer the traditional MBR of a hard disk
 .B mbrpatch
 reads, displays, and interactively edits the 512-byte Master Boot Record
 of a traditional MBR-partitioned hard disk.
-.PP
-The traditional MBR partition scheme was introduced with IBM PC DOS\ 2.0
-in 1983 and remains in widespread use today.
-It stores up to four primary partition entries in a 64-byte table at MBR
-offset
-.BR 0x1BE ,
-each describing a partition by its CHS start and end addresses, type byte,
-and LBA start sector and count.
-.B mbrpatch
-understands this standard partition table and also supports the extended
-boot menu label feature of the
+It understands the standard four-entry MBR partition table and
+the extended boot menu label feature of the
 .B MBR88
 v0.2 boot record.
+The MBR partition table format is compatible with operating systems from
+MS-DOS 2.0 (1983) through current Linux kernels;
+.B MBR88
+boot records have been tested on FreeDOS and ELKS.
 .PP
-It can also read the MBR directly from a physical disk device or write a
-prepared image back to disk, removing the need for out-of-band tools
+It can also read the MBR directly from a physical disk device or write
+a prepared image back to disk, removing the need for out-of-band tools
 such as
 .BR dd (1)
 on Linux or
@@ -75,6 +70,9 @@ Device writes
 are permanent and have no automatic backup; use
 .B \-r
 to save a copy before proceeding.
+.PP
+For binary format reference see
+.BR mbr88 (5).
 .\"
 .\" -------------------------------------------------------------------------
 .SH MODES
@@ -96,13 +94,14 @@ If the
 signature is present and the version is exactly
 .BR v0.2 ,
 boot menu label editing is also available.
+A higher version causes a message directing you to get a newer mbrpatch.
 .TP
 .B mbrpatch \-u \fImbr_file\fR
 .B "Upgrade mode."
 Validates the file, replaces its boot code with the
 .B MBR88 v0.2
 boot record, and preserves the existing partition table entries.
-Existing label slots are recovered if they contain valid mbr88 label data;
+Existing label slots are recovered if they contain valid MBR88 label data;
 slots that do not pass the validity check are zeroed.
 The disk ID and write-protect flag at offsets
 .B 0x1B8\-0x1BD
@@ -195,10 +194,9 @@ l l .
 \fBv\fR	Set the boot menu volume label for a partition (MBR88 v0.2 only).
 	Up to 11 characters, displayed in the boot menu.
 \fBm\fR	Manage disk metadata (disk ID and write-protect flag).
-	Available on any traditional MBR disk, not only mbr88 images.
 	See DISK METADATA below.
 \fBp\fR	Print the current state of the partition table.
-\fBl\fR	List common partition type codes.
+\fBl\fR	List common partition type codes.  See \fBMBR88\fR(5) for the full table.
 \fBw\fR	Ask for confirmation, write a backup to \fImbr_file\fB.bak\fR,
 	then write the file.
 \fBh\fR	Print the command summary.
@@ -210,91 +208,65 @@ l l .
 .\"
 The
 .B m
-command manages two standard fields in the traditional MBR region that are
-not part of the partition table itself.
-These fields are present on any traditional MBR disk and are editable
-regardless of whether the
+command manages two standard fields in the MBR that are not part of the
+partition table itself.
+These fields are available regardless of whether the
 .B MBR88
 signature is present.
 .PP
 .B Disk ID
-(offsets
-.BR 0x1B8 \- 0x1BB )
-is a 32-bit little-endian identifier used by operating systems and disk
-utilities to track a disk across reboots and drive letter changes.
-It does not need to be cryptographically random; it only needs to be
-probably unique across the disks on a given machine.
-.B mbr88
-leaves this field clear in the template image.
+.RB ( 0x1B8 \- 0x1BB )
+is a 32-bit little-endian identifier used by operating systems to track
+a disk across reboots and drive letter changes.
+It does not need to be cryptographically unique.
+.B MBR88
+leaves this field clear in the template image;
 .B mbrpatch
-offers to generate a disk ID automatically when entering
+offers to generate one automatically when entering
 .B \-n
 or
 .B \-u
 mode if the field is empty.
-.PP
-The
-.B m
-submenu provides four options for the disk ID:
-.PP
-.RS
-.TS
-l l .
-\fB(G)\fR	Generate a random disk ID using a platform entropy source.
-\fB(E)\fR	Enter a specific disk ID value manually (up to 8 hex digits).
-	Spaces are accepted; the value is stored little-endian.
-	This matches the display format used by \fBfdisk\fR(8) and
-	\fBmbrpatch\fR itself.
-\fB(Z)\fR	Zero the disk ID (marks it as not set).
-.TE
-.RE
+The submenu options are
+.B G
+(generate),
+.B E
+(enter manually),
+and
+.B Z
+(zero the field).
 .PP
 .B Write-protect flag
-(offsets
-.BR 0x1BC \- 0x1BD )
+.RB ( 0x1BC \- 0x1BD )
 is a hint field.
-A value of
+The value
 .B 0x5A5A
-indicates that the disk should be treated as read-only.
-This hint is defined in the traditional MBR specification but is rarely
-enforced by operating systems or tools in practice.
-.B 0x0000
-is normal (read/write).
-The
-.B m
-submenu offers
-.B (S)et
-or
-.B (C)lear
-for this flag depending on its current state;
-only the relevant option is shown to avoid no-op choices.
+indicates the disk should be treated as read-only.
+This hint is rarely enforced by real tools but the field is present on
+all MBR-partitioned disks.
+The submenu shows only the relevant option:
+.B S
+(set) or
+.B C
+(clear).
 .PP
-The
-.B (K)eep
-option exits the submenu without further changes.
-Each option in the submenu is independent; the disk ID and write-protect
-flag can be changed in any combination within a single
-.B m
-session.
+.B K
+(keep) exits the submenu without changes.
+The two fields are independent; either can be changed while leaving
+the other alone.
 .\"
 .\" -------------------------------------------------------------------------
 .SH HOSTILE MBR DETECTION
 .\"
 .B mbrpatch
-inspects the boot code of every MBR it loads and classifies it before
-allowing any write operations.
-Two tiers of response are possible.
+inspects the boot code of every MBR it loads.
 .PP
-.B Hard block (GPT disks).
-If any partition entry has type byte
-.B 0xEE
-(GPT protective MBR) or a mix of
-.B 0xEE
-and non-empty other entries (hybrid GPT/MBR),
+.B GPT disks
+(partition type
+.BR 0xEE ):
 .B mbrpatch
-refuses all write operations and displays a warning instead of the normal
-partition table.
-The real partition table on a GPT disk lives at LBA\ 1 and is not visible
+refuses all write operations and displays a warning.
+The real partition table on a GPT disk lives at LBA 1 and is not visible
 to
 .BR mbrpatch .
 Use a GPT-aware tool such as
@@ -303,96 +275,11 @@ or
 .BR parted (8)
 for these disks.
 .PP
-.B Warning (known third-party boot loaders).
-If the MBR contains GRUB Legacy, GRUB2, or LILO boot code,
+.B GRUB / LILO boot code:
 .B mbrpatch
-displays a warning but allows the session to continue after the user
-confirms.
-Upgrading such a disk will overwrite the existing boot loader; the system
-may not boot until it is reinstalled.
-.\"
-.\" -------------------------------------------------------------------------
-.SH PARTITION TABLE FORMAT
-.\"
-The MBR partition table occupies 64 bytes at offset
-.B 0x1BE
-and holds four 16-byte entries in the IBM CHS format used by the original
-PC/XT BIOS.
-Each entry contains:
-.PP
-.TS
-l l .
-Byte 0	Status: 0x00 = inactive, 0x80 = bootable
-Bytes 1\-3	CHS address of the first sector (packed)
-Byte 4	Partition type (e.g. 01=FAT12, 06=FAT16B, 83=Linux)
-Bytes 5\-7	CHS address of the last sector (packed)
-Bytes 8\-11	LBA start sector (32-bit little-endian, computed from CHS)
-Bytes 12\-15	LBA sector count (32-bit little-endian, computed from CHS)
-.TE
-.\"
-.\" -------------------------------------------------------------------------
-.SH MBR88 FEATURES
-.\"
-.B MBR88
-is a custom MBR boot record for IBM XT-class hardware that presents an
-interactive boot menu and always waits for the user to choose what to boot.
-It supports hard disk partitions 1 through 4 and floppy drives A and B.
-.PP
-Only partitions with status byte
-.B 0x80
-appear in the
-.B MBR88
-boot menu.
-Unlike conventional single-boot MBR loaders,
-.B MBR88
-permits more than one partition to be marked bootable simultaneously;
-all marked partitions will appear in the menu.
-Use the
-.B b
-interactive command to set the flag on each partition to be shown.
-.PP
-Conventional partitioning tools such as
-.BR FDISK
-enforce a single active partition.
-After running such tools it is necessary to re-run
-.B mbrpatch \-p
-to restore the bootable flag on any additional boot partitions.
-.PP
-The
-.B MBR88
-boot record is identified by the five-byte ASCII signature
-.B mbr88
-at MBR offset
-.BR 0x1B2 ,
-followed by a version byte at
-.BR 0x1B7 .
-Version byte
-.B 0x02
-corresponds to
-.BR v0.2 .
-.PP
-The disk ID region at offsets
-.B 0x1B8\-0x1BB
-and the write-protect flag at
-.B 0x1BC\-0x1BD
-are intentionally left clear by the
-.B MBR88
-template.
-This allows disk utilities to write their own identifiers without
-conflicting with the mbr88 boot record, and allows
-.B mbrpatch
-to manage these fields independently via the
-.B m
-command.
-.PP
-When an
-.B MBR88 v0.2
-image is loaded, four 16-byte volume label slots at offset
-.B 0x41
-become editable via the
-.B v
-command.
-Each slot holds up to 11 characters of ASCII text displayed in the boot menu.
+displays a warning before any write operation and asks for confirmation.
+Overwriting an existing boot loader will prevent the system from booting
+until the loader is reinstalled.
 .\"
 .\" -------------------------------------------------------------------------
 .SH EXAMPLES
@@ -421,7 +308,7 @@ mbrpatch original.bin
 .fi
 .RE
 .PP
-.B Upgrade an existing MBR to mbr88, set labels, and write to the image file:
+.B Upgrade an existing MBR to MBR88 v0.2, set labels, and write the file:
 .PP
 .RS
 .nf
@@ -436,8 +323,7 @@ to mark bootable partitions,
 .B v
 to add or correct labels,
 .B m
-to set a disk ID if desired,
-then
+to set a disk ID, then
 .B w
 to write.
 .PP
@@ -450,7 +336,7 @@ mbrpatch \-w original.bin 80h          (FreeDOS)
 .fi
 .RE
 .PP
-.B Creating a new mbr88 image from scratch:
+.B Create a new MBR88 image from scratch:
 .PP
 .RS
 .nf
@@ -467,8 +353,7 @@ to mark them bootable,
 .B v
 to set labels,
 .B m
-to set a recognisable disk ID,
-then
+to set a disk ID, then
 .B w
 to write the file.
 .\"
@@ -478,14 +363,18 @@ to write the file.
 .B Bootable flag.
 The status byte at offset 0 of each partition entry controls which
 partitions
-.B mbr88
-shows in the boot menu.
-Only bootable partitions are displayed.
+.B MBR88
+.BR "shows in the boot menu."
 Multiple partitions may safely be marked bootable simultaneously when
 using
-.B mbr88
+.B MBR88
 as the boot loader.
-Other MBR loaders typically require exactly one active partition.
+Conventional tools such as
+.B FDISK
+enforce a single active partition; after running such tools it is
+necessary to re-run
+.B mbrpatch \-p
+to restore the flag on any additional boot partitions.
 .PP
 .B Device writes.
 The
@@ -507,24 +396,23 @@ On FreeDOS the disk is identified by its BIOS drive number.
 (written as
 .B 80h
 on the command line) is always the first hard disk.
-.B 0x81
-is the second.
 Drive letters are deliberately not used because they may be remapped
 by network redirectors and other drivers.
-.PP
-.B Backup files.
-A backup of the image file is written to
-.I mbr_file\fB.bak\fR
-immediately before any write operation to that file.
-No automatic backup is made when writing to a device with
-.BR \-w .
 .PP
 .B Drive geometry.
 IBM XT hard disks typically use 16 heads per cylinder and 17 sectors
 per track.
-Incorrect geometry produces wrong LBA start and size values.
+Incorrect geometry produces wrong LBA values.
 XT-class BIOSes use only the CHS fields and ignore LBA, so this
-rarely causes a problem in practice.
+rarely causes a problem in practice, but modern tools that read LBA
+fields may report incorrect values.
+.PP
+.B Backup files.
+A backup of the image file is written to
+.I mbr_file\fB.bak\fR
+immediately before any write to the file.
+No automatic backup is made when writing to a device with
+.BR \-w .
 .\"
 .\" -------------------------------------------------------------------------
 .SH FILES
@@ -536,16 +424,20 @@ to the file.
 .TP
 .I /usr/share/man/man8/mbrpatch.8
 This manual page.
+.TP
+.I /usr/share/man/man5/MBR88.5
+Binary format reference for the MBR partition table and MBR88 extensions.
 .\"
 .\" -------------------------------------------------------------------------
 .SH SEE ALSO
 .\"
+.BR mbr88 (5),
 .BR fdisk (8),
-.BR gdisk (8),
 .BR dd (1),
-.BR hexdump (1)
+.BR hexdump (1),
+.BR gdisk (8)
 .PP
-.B mbr88 project:
+.B MBR88 project:
 .I https://github.com/cpiker/mbr88
 .PP
 .B OS coexistence notes:
@@ -570,7 +462,7 @@ or that CHS end values are greater than CHS start values.
 .\" -------------------------------------------------------------------------
 .SH AUTHOR
 .\"
-Written by Chris Piker with the assistance of Claude (Anthropic)
+Chris Piker and Claude (Anthropic)
 .PP
 Part of the
 .B mbr88

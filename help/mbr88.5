@@ -1,0 +1,337 @@
+.\" mbr88.5 - Binary format reference for the MBR88 boot record
+.\" Part of the mbr88 project: https://github.com/cpiker/mbr88
+.\" MIT License - Copyright (c) 2026 Chris Piker
+.\"
+.\" Install: cp mbr88.5 /usr/share/man/man5/
+.\"          gzip /usr/share/man/man5/mbr88.5
+.\"
+.TH MBR88 5 "2026" "MBR88 v0.2" "File Formats"
+.\"
+.\" -------------------------------------------------------------------------
+.SH NAME
+.\"
+MBR88 \- binary format of the traditional Master Boot Record and MBR88 extensions
+.\"
+.\" -------------------------------------------------------------------------
+.SH DESCRIPTION
+.\"
+This page documents the on-disk binary format of the 512-byte Master Boot
+Record as used by
+.BR MBR88 .
+It covers the standard MBR fields present on all traditional
+MBR-partitioned disks, plus the
+.B MBR88
+extensions.
+Fields specific to
+.B MBR88
+are marked
+.BR [MBR88] .
+.PP
+The MBR partition table format is compatible with operating systems from
+MS-DOS 2.0 (1983) through current Linux kernels, and with everything
+in between that matters: FreeDOS, DR-DOS, OS/2, Windows through at least
+Windows 10, and ELKS.
+.B MBR88
+boot records have been tested on FreeDOS and ELKS; the partition table
+itself is read correctly by anything that speaks traditional MBR.
+.PP
+The MBR format was introduced with IBM PC DOS\ 2.0 in 1983, designed for
+the original IBM PC XT.
+In those 512 bytes live the boot code, the four-entry partition table,
+and a handful of compatibility fields that accreted over the years as
+various operating systems quietly decided that some of that unused space
+was theirs now.
+.B MBR88
+continues this proud tradition by adding a boot menu and partition labels
+to the bytes that generic DOS loaders leave as zeros.
+.\"
+.\" -------------------------------------------------------------------------
+.SH MEMORY MAP
+.\"
+.TS
+l l l .
+\fBOffset\fR	\fBSize\fR	\fBDescription\fR
+0x000	3	Jump instruction to boot code entry point
+0x003	438	Boot code region  (see below)
+0x1B0	1	[MBR88] Code slack byte (reserved, 0x00)
+0x1B1	1	[MBR88] Cassini byte (0xD9)
+0x1B2	5	[MBR88] Signature: ASCII \fBmbr88\fR
+0x1B7	1	[MBR88] Version byte
+0x1B8	4	Disk ID (32-bit little-endian)
+0x1BC	2	Write-protect flag
+0x1BE	64	Partition table (4 \(mu 16 bytes)
+0x1FE	2	Boot signature 0x55 0xAA
+.TE
+.PP
+Total: 512 bytes.
+.\"
+.\" -------------------------------------------------------------------------
+.SH JUMP HEADER (0x000\-0x002)
+.\"
+A three-byte jump to the actual entry point of the boot code, past the
+data area.
+Common encodings are
+.B EB\ xx\ 90
+(short JMP + NOP) and
+.B E9\ xx\ xx
+(near JMP).
+.\"
+.\" -------------------------------------------------------------------------
+.SH BOOT CODE REGION (0x003\-0x1AF)
+.\"
+In a standard DOS MBR this entire range is executable machine code.
+.B MBR88
+uses the low end of this region for boot menu label storage and places
+its code above that.
+The final byte of
+.B MBR88
+boot code sits at
+.BR 0x1AF.
+.SS Boot Menu Label Slots (0x041\-0x080)\ \ [MBR88]
+.B MBR88
+stores a display label for each partition table entry in four consecutive
+16-byte slots beginning at offset
+.BR 0x041 .
+.PP
+.B Slot layout (16 bytes):
+.PP
+.TS
+l l .
+Bytes 0\-10	Label text: 1 to 11 printable ASCII characters.
+Byte N	Terminator: CR (0x0D), LF (0x0A), or NUL (0x00).
+	N is the index of the first terminator byte.
+Bytes N+1\-15	Zero padding.
+.TE
+.PP
+A slot is valid if at least one printable ASCII character precedes the
+terminator, the terminator is CR, LF, or NUL, and all bytes after the
+terminator are zero.
+An all-zero slot means no label is set for that partition.
+.PP
+.B Slot-to-partition mapping:
+.PP
+.TS
+l l .
+Slot 0 (0x041\-0x050)	Partition 1
+Slot 1 (0x051\-0x060)	Partition 2
+Slot 2 (0x061\-0x070)	Partition 3
+Slot 3 (0x071\-0x080)	Partition 4
+.TE
+.\"
+.\" -------------------------------------------------------------------------
+.SH MBRHDR SIGNATURE REGION (0x1B0\-0x1B7)\ \ [MBR88]
+.\"
+.TS
+l l l .
+\fBOffset\fR	\fBSize\fR	\fBDescription\fR
+0x1B0	1	Code slack byte.  Always 0x00.
+0x1B1	1	Cassini byte.  Always 0xD9.
+0x1B2	5	ASCII signature \fBMBR88\fR (0x6D 0x62 0x72 0x38 0x38).
+0x1B7	1	Version byte: high nibble = major, low nibble = minor.
+	 	MBR88 v0.2 = 0x02.
+.TE
+.PP
+.B The Cassini byte.
+.B 0xD9
+at offset
+.B 0x1B1
+is the last byte of telemetry received from the Cassini spacecraft as it
+entered Saturn's atmosphere on September 15, 2017.
+After
+.B 0xD9
+arrived, there was no more data.
+It is preserved here in memory of the mission.
+.\"
+.\" -------------------------------------------------------------------------
+.SH DISK METADATA REGION (0x1B8\-0x1BD)
+.\"
+These fields are part of the traditional MBR specification and are
+present on any MBR-partitioned disk, not only
+.B MBR88
+images.
+.SS Disk ID (0x1B8\-0x1BB)
+A 32-bit little-endian value used by operating systems to track a disk
+across reboots and drive letter changes.
+Introduced by Windows NT; used by OS/2 and later systems.
+.PP
+The ID does not need to be cryptographically unique \(em just distinct
+enough that two disks on the same machine are unlikely to collide.
+A random 32-bit value is fine.
+.PP
+.B MBR88
+leaves this field as
+.B 0x00000000
+in the template image.
+.BR mbrpatch (8)
+offers to generate an ID automatically when entering
+.B \-n
+or
+.B \-u
+mode if the field is empty.
+.PP
+.I Display convention:
+the disk ID is displayed as four bytes in little-endian order,
+matching the convention used by Linux
+.BR fdisk (8).
+A stored value of
+.B DE\ AD\ BE\ EF
+displays as
+.BR EF\ BE\ AD\ DE .
+This surprises people exactly once.
+.SS Write-protect Flag (0x1BC\-0x1BD)
+A 16-bit hint field introduced alongside the disk ID by Windows NT 3.5.
+.B 0x5A5A
+indicates the disk should be treated as read-only by compliant tools;
+.B 0x0000
+is normal (read/write).
+DOS 2.0 through 9x left these bytes as zeros by happenstance \(em the
+field simply wasn't defined yet.
+Even today it is rarely enforced in practice.
+.\"
+.\" -------------------------------------------------------------------------
+.SH PARTITION TABLE (0x1BE\-0x1FD)
+.\"
+Four 16-byte partition entries packed end-to-end beginning at
+.BR 0x1BE .
+Each entry describes one primary partition.
+Empty slots are all zeros.
+.SS Partition Entry Format (16 bytes)
+.TS
+l l l .
+\fBOffset\fR	\fBSize\fR	\fBDescription\fR
+0	1	Status byte: 0x00 = inactive, 0x80 = bootable.
+1	3	CHS address of the first sector (packed; see below).
+4	1	Partition type byte.  See PARTITION TYPE CODES.
+5	3	CHS address of the last sector (packed; see below).
+8	4	LBA start sector (32-bit little-endian).
+12	4	LBA sector count (32-bit little-endian).
+.TE
+.PP
+.BR mbrpatch (8)
+computes LBA start and count from the CHS values entered with the
+.B g
+and
+.B n
+commands.
+XT-class BIOSes use only the CHS fields; the LBA fields are for the
+benefit of modern tools.
+.SS CHS Encoding (3 bytes, packed)
+Cylinder, head, and sector are packed into three bytes in a layout
+that manages to hide 10 bits of cylinder across two non-adjacent
+bit fields:
+.PP
+.TS
+l l .
+Byte 0	Head number (8 bits, 0\-255).
+Byte 1 bits 7\-6	High two bits of cylinder number (bits 9\-8).
+Byte 1 bits 5\-0	Sector number (6 bits, 1\-63).
+Byte 2	Low eight bits of cylinder number (bits 7\-0).
+.TE
+.PP
+Cylinder is 10 bits (0\-1023), head is 8 bits (0\-255), sector is 6
+bits (1\-63).
+Sector numbers start at 1, not 0.
+The IBM XT BIOS uses a subset of this range: typically 0\-305 cylinders,
+0\-15 heads, 1\-17 sectors.
+.SS Bootable Flag and MBR88
+.B MBR88
+only displays and chain-loads partitions with status byte
+.BR 0x80 .
+Unlike conventional single-boot MBR loaders,
+.B MBR88
+permits more than one partition to be marked bootable simultaneously;
+all marked partitions appear in the boot menu.
+.PP
+Conventional tools such as
+.B FDISK
+enforce a single active partition.
+After running such tools it is necessary to re-run
+.B mbrpatch \-p
+to restore the bootable flag on any additional boot partitions.
+.\"
+.\" -------------------------------------------------------------------------
+.SH BOOT SIGNATURE (0x1FE\-0x1FF)
+.\"
+.TS
+l l .
+0x1FE	0x55
+0x1FF	0xAA
+.TE
+.PP
+The BIOS checks for this two-byte signature before treating the sector
+as bootable.
+.BR mbrpatch (8)
+refuses to load files that lack it.
+.\"
+.\" -------------------------------------------------------------------------
+.SH PARTITION TYPE CODES
+.\"
+The partition type byte at offset 4 of each entry is an informal registry
+dating to DOS\ 2.0, assigned by vendors as needed over the decades.
+Common values relevant to XT-class hardware:
+.PP
+.TS
+l l .
+\fBCode\fR	\fBDescription\fR
+00	Empty (slot unused)
+01	FAT12
+02	Xenix root
+03	Xenix usr
+04	FAT16 <32\ MB
+05	Extended (CHS)
+06	FAT16B \(>=32\ MB
+07	HPFS / NTFS / exFAT
+0A	OS/2 Boot Manager
+0B	FAT32
+0C	FAT32 LBA
+0E	FAT16 LBA
+0F	Extended LBA
+11	Hidden FAT12
+14	Hidden FAT16 <32\ MB
+16	Hidden FAT16B
+1B	Hidden FAT32
+1C	Hidden FAT32 LBA
+1E	Hidden FAT16 LBA
+64	NetWare 286
+80	ELKS / Old MINIX
+81	MINIX
+82	Linux swap
+83	Linux
+DB	CP/M-86
+EE	GPT protective MBR  (mbrpatch refuses writes to this disk)
+EF	EFI system partition
+.TE
+.PP
+Any value 00\-FF is accepted by
+.BR mbrpatch (8).
+Values not in this table display as
+.B Unknown
+in the partition summary, but I bet you can find out.
+If you know what's on a partition,
+.B mbrpatch
+won't argue.
+.\"
+.\" -------------------------------------------------------------------------
+.SH SEE ALSO
+.\"
+.BR mbrpatch (8),
+.BR fdisk (8),
+.BR hexdump (1),
+.BR gdisk (8)
+.PP
+.B MBR88 project:
+.I https://github.com/cpiker/mbr88
+.PP
+.B OS coexistence notes:
+.I compatibility.md
+in the project sources.
+.\"
+.\" -------------------------------------------------------------------------
+.SH AUTHOR
+.\"
+Chris Piker and Claude (Anthropic)
+.PP
+Part of the
+.B mbr88
+project.
+MIT License \(em Copyright (c) 2026 Chris Piker.
