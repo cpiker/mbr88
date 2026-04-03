@@ -41,7 +41,7 @@ records but not change them.  Only traditional MBRs are supported.
 
 ## Commemoration
 
-Embedded in unused region of an MBR88 record is the last byte that I
+Embedded in an unused region of an MBR88 record is the last byte that I
 could get off the Cassini spacecraft as it plummeted into Saturn.  As far as
 I know it was the last complete byte to make it to Earth from the mission.
 She was a good ship, run by an even better team. Details are in the source
