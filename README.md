@@ -1,28 +1,26 @@
 # MBR88
 An OS independent 8088 op-code clean MBR for dual booting ELKS, FreeDOS or other
-OS up through Windows 98.  Patching tool currently cross compiles for 
-[ELKS](https://github.com/ghaerr/elks).  Adding [FreeDOS](https://github.com/FDOS)
-support via [OpenWatcom](https://github.com/open-watcom) is in the works.
-MBR assembly provided in both NASM and GNU Assembler syntax.
+OS up through many modern operating systems. Patching tool currently cross compiles 
+natively for linux and cross compiles for [ELKS](https://github.com/ghaerr/elks) via
+[ia16-gcc](https://github.com/tkchia/gcc-ia16) and [FreeDOS](https://github.com/FDOS) 
+via [OpenWatcom](https://github.com/open-watcom).  MBR assembly is provided in
+NASM native syntax.
 
-*Don't use this yet.  Currently adding support for Windows NT and OS/2 disk
-signatures.*
+Safe for ELKS, but *don't use this yet on FreeDOS yet, currently still testing the
+Watcom build of mbrpatch.*
 
-A custom 512-byte MBR boot record for IBM XT-class hardware, plus supporting
-tools. Should work all the way through the Windows 95 era, so long as the machine
-is booted to real-mode DOS.  Designed for multi-booting FreeDOS, ELKS Linux,
-and other OSes on a single partitioned hard drive. Always presents a boot menu
-and waits for user input -- never auto-boots. Only partitions marked with the
-0x80 bootable flag appear in the menu; multiple partitions may be simultaneously
-marked 0x80. Also allows for booting to a floppy even if initally loaded from a 
-hard drive or flash card.
+The MBR reserves space within it's tiny 512 byte area for volume names to display
+in the boot menu.  MBR88 always presents a boot menu and waits for user input.  Since 
+it never auto-boots it's good for desktops, but not suitable for servers.  Only
+partitions marked with the 0x80 bootable flag appear in the menu but up to *four*
+partitions may be simultaneously marked as bootable.  The boot menu also allows for
+booting from a floppy even if it's installed on the first hardrive or or flash card.
 
 ![Screenshot ELKS/FreeDOS dualboot](screenshot.png)
 
-Written by Claude Code under heavy interrogation by C. Piker.  Verified on
-a Leading Edge Model D with two floppy drives and a four partition hard
-disk with both ELKS Linux and FreeDos installed.  More hardware verification
-in the works.
+Written by C. Piker and Claude (Anthropic).  Verified on a Leading Edge Model D with
+two floppy drives and a SD card reader with XTIDE installed. More hardware and OS
+verification is in the works.
 
 ## Acknowledgement
 Thanks to osdev.org for the reference material and insights that informed the
