@@ -104,19 +104,16 @@
  * SEC:PORTABILITY -- conditional includes for POSIX vs Open Watcom
  */
 #ifdef __WATCOMC__
-#	include <io.h>
-#	include <fcntl.h>
-#	include <bios.h>
-#	define O_RDONLY   _O_RDONLY
-#	define O_WRONLY   _O_WRONLY
-#	define O_CREAT    _O_CREAT
-#	define O_TRUNC    _O_TRUNC
-#	define OPEN_MODE  0
+#	include <io.h>      /* open, read, write, close -- Watcom POSIX I/O layer */
+#	include <fcntl.h>   /* O_RDONLY, O_WRONLY, O_CREAT, O_TRUNC               */
+#	include <bios.h>    /* _bios_disk, _bios_timeofday                         */
+#	define OPEN_MODE  0 /* Watcom open() ignores mode arg; supply a safe zero  */
 #else
 #	include <unistd.h>
 #	include <fcntl.h>
 #	include <sys/stat.h>
 #	define OPEN_MODE  0644
+#	define O_BINARY   0    /* Define away for POSIX case */
 #endif
 
 #include <stdio.h>
@@ -147,7 +144,7 @@ typedef char mbr_size_check_[
 /* MBR88_LABEL_BASE, MBR88_LABEL_SLOT_SZ, MBR88_LABEL_MAX come from mbr88.h */
 
 /* Two-column display geometry -- 38 + 4 + 38 = 80 */
-#define COL_WIDTH         38
+#define COL_WIDTH         37
 #define COL_GAP           4
 #define LINE_WIDTH        (COL_WIDTH * 2 + COL_GAP)
 
@@ -618,9 +615,9 @@ static int copy_file(const char *src, const char *dst)
 {
 	unsigned char buf[512];
 	int fdin, fdout, n, result = 0;
-	fdin = open(src, O_RDONLY);
+	fdin = open(src, O_RDONLY | O_BINARY);
 	if (fdin < 0) { perror(src); return -1; }
-	fdout = open(dst, O_WRONLY | O_CREAT | O_TRUNC, OPEN_MODE);
+	fdout = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, OPEN_MODE);
 	if (fdout < 0) { perror(dst); close(fdin); return -1; }
 	while ((n = read(fdin, buf, sizeof(buf))) > 0) {
 		if (write(fdout, buf, n) != n) { perror(dst); result = -1; break; }
@@ -787,7 +784,7 @@ static void fmt_size(char *buf, unsigned long sectors)
 
 static void col_row(char line[COL_WIDTH+1], const char *s)
 {
-	snprintf(line, COL_WIDTH+1, "%-38.38s", s);
+	snprintf(line, COL_WIDTH+1, "%-37.37s", s);
 }
 
 static void col_lines(int slot_1based, char lines[7][COL_WIDTH + 1])
@@ -1111,7 +1108,7 @@ static int gen_disk_id(void)
 	{
 		unsigned long ticks = 0;
 		unsigned long hi, lo, id;
-		_bios_timeofday(_TIME_GETCLOCK, &ticks);
+		_bios_timeofday(_TIME_GETCLOCK, (long*)&ticks);
 		hi = (ticks >> 16) & 0xFFFF;
 		lo = ticks & 0xFFFF;
 		id = ((hi ^ 0xA55A) << 16) | (lo ^ 0x5AA5);
@@ -1151,7 +1148,7 @@ static int gen_disk_id(void)
 	 * This is the best available entropy source on a full Linux system. */
 	{
 		int fd, n;
-		fd = open("/dev/urandom", O_RDONLY);
+		fd = open("/dev/urandom", O_RDONLY|O_BINARY);
 		if (fd < 0) return 0;
 		n = read(fd, mbr + DISKID_OFFSET, DISKID_LEN);
 		close(fd);
@@ -1539,7 +1536,28 @@ static void cmd_write(void)
 	}
 
 	if (file_exists) {
+#if defined(__WATCOMC__) || defined(__ia16__)
+		/* 8.3 filename constraint: strip any existing extension before
+		 * appending .bak.  "mbr.bin" -> "mbr.bak", "mbr" -> "mbr.bak".
+		 * Search only the filename part (after last slash or backslash)
+		 * so a dot in a directory name is not mistaken for an extension. */
+		{
+			char base[260];
+			char *p, *last_sep, *last_dot;
+			strncpy(base, mbr_path, sizeof(base) - 1);
+			base[sizeof(base) - 1] = '\0';
+			last_sep = NULL;
+			for (p = base; *p; p++)
+				if (*p == '/' || *p == '\\') last_sep = p;
+			last_dot = NULL;
+			for (p = last_sep ? last_sep + 1 : base; *p; p++)
+				if (*p == '.') last_dot = p;
+			if (last_dot) *last_dot = '\0';
+			snprintf(bak, sizeof(bak), "%s.bak", base);
+		}
+#else
 		snprintf(bak, sizeof(bak), "%s.bak", mbr_path);
+#endif
 		if (copy_file(mbr_path, bak) == 0)
 			printf("  Backup written to: %s\n", bak);
 		else {
@@ -1548,7 +1566,7 @@ static void cmd_write(void)
 		}
 	}
 
-	fd = open(mbr_path, O_WRONLY | O_CREAT | O_TRUNC, OPEN_MODE);
+	fd = open(mbr_path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, OPEN_MODE);
 	if (fd < 0) { perror(mbr_path); return; }
 	n = write(fd, mbr, MBR_SIZE);
 	close(fd);
@@ -1805,7 +1823,7 @@ static int disk_write_mbr(const char *device, const unsigned char *buf)
 static int disk_read_mbr(const char *device, unsigned char *buf)
 {
 	int fd, n;
-	fd = open(device, O_RDONLY);
+	fd = open(device, O_RDONLY|O_BINARY);
 	if (fd < 0) { perror(device); return 1; }
 	n = read(fd, buf, MBR_SIZE);
 	close(fd);
@@ -1821,7 +1839,7 @@ static int disk_read_mbr(const char *device, unsigned char *buf)
 static int disk_write_mbr(const char *device, const unsigned char *buf)
 {
 	int fd, n;
-	fd = open(device, O_WRONLY);
+	fd = open(device, O_WRONLY|O_BINARY);
 	if (fd < 0) { perror(device); return 1; }
 	n = write(fd, buf, MBR_SIZE);
 	close(fd);
@@ -1845,7 +1863,7 @@ static int load_and_validate(void)
 {
 	int fd, n;
 
-	fd = open(mbr_path, O_RDONLY);
+	fd = open(mbr_path, O_RDONLY|O_BINARY);
 	if (fd < 0) {
 		perror(mbr_path);
 		return 1;
@@ -1885,8 +1903,14 @@ int main(int argc, char *argv[])
 	char disk_device[256];   /* -r / -w: device path or BIOS drive number */
 	int  fd;
 	char cmd_buf[8];
-
+	
 	disk_device[0] = '\0';
+
+
+#ifdef __WATCOMC__
+	setmode(fileno(stdout), O_TEXT);
+	setmode(fileno(stderr), O_TEXT);
+#endif
 
 	/* -h / --help */
 	if (argc == 2 &&
@@ -1971,7 +1995,7 @@ int main(int argc, char *argv[])
 		print_table();
 
 		/* Save to file -- must not already exist (safety) */
-		fd2 = open(mbr_path, O_RDONLY);
+		fd2 = open(mbr_path, O_RDONLY|O_BINARY);
 		if (fd2 >= 0) {
 			close(fd2);
 			fprintf(stderr,
@@ -1980,7 +2004,7 @@ int main(int argc, char *argv[])
 				mbr_path);
 			return 1;
 		}
-		fd2 = open(mbr_path, O_WRONLY | O_CREAT | O_TRUNC, OPEN_MODE);
+		fd2 = open(mbr_path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, OPEN_MODE);
 		if (fd2 < 0) { perror(mbr_path); return 1; }
 		n2 = write(fd2, mbr, MBR_SIZE);
 		close(fd2);
@@ -2046,7 +2070,7 @@ int main(int argc, char *argv[])
 	 * Mode: new -- file must NOT exist
 	 */
 	if (mode_new) {
-		fd = open(mbr_path, O_RDONLY);
+		fd = open(mbr_path, O_RDONLY|O_BINARY);
 		if (fd >= 0) {
 			close(fd);
 			fprintf(stderr,

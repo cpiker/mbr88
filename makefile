@@ -28,12 +28,12 @@ BN:=build/native
 BE:=build/elks
 BD:=build/freedos
 
-native: $(BN) $(BN)/mbr88.bin $(BN)/mk_head $(BN)/mbr88.h $(BN)/mbrpatch
+native: $(BN)/mbrpatch
 
 #elks: $(BE) $(BE)/mbr88_g.bin $(BE)/mk_head $(BE)/mbr88.h $(BE)/mbrpatch
-elks: $(BE) $(BE)/mbr88.bin $(BE)/mk_head $(BE)/mbr88.h $(BE)/mbrpatch
+elks: $(BE)/mbrpatch
 
-freedos: $(BD) $(BD)/mbr88.bin $(BD)/mk_head $(BD)/mbr88.h $(BD)/mbrpatch.com
+freedos: $(BD)/mbrpatch.com
 
 # Used to insure the template MBR binaries emitted by NASM
 # and GAS are identical.  Requireds the ELKS environment or
@@ -46,10 +46,10 @@ check_equal:$(BN)/mbr88.bin $(BE)/mbr88_g.bin
 $(BN):
 	@if [ ! -e "$@" ]; then mkdir -p $@; fi
 
-$(BN)/mbr88.bin:src/mbr88.asm
+$(BN)/mbr88.bin:src/mbr88.asm | $(BN)
 	nasm -f bin $< -o $@
 
-$(BN)/mk_head:src/mk_head.c
+$(BN)/mk_head:src/mk_head.c | $(BN)
 	gcc -Wall $< -o $@ 
 
 $(BN)/mbr88.h:$(BN)/mk_head $(BN)/mbr88.bin
@@ -64,11 +64,11 @@ $(BN)/mbrpatch:src/mbrpatch.c $(BN)/mbr88.h
 $(BE):
 	@if [ ! -e "$@" ]; then mkdir -p $@; fi
 
-$(BE)/mbr88.bin:src/mbr88.asm
+$(BE)/mbr88.bin:src/mbr88.asm | $(BE)
 	nasm -f bin -o $@ $<	
 
 # This is built native since it's an intermediary file
-$(BE)/mk_head:src/mk_head.c
+$(BE)/mk_head:src/mk_head.c  | $(BE)
 	gcc -Wall $< -o $@
 
 $(BE)/mbr88.h:$(BE)/mk_head $(BE)/mbr88.bin
@@ -93,17 +93,29 @@ $(BE)/mbrpatch:src/mbrpatch.c $(BE)/mbr88.h
 $(BD):
 	@if [ ! -e "$@" ]; then mkdir -p $@; fi
 
-$(BD)/mbr88.bin:src/mbr88.asm
+$(BD)/mbr88.bin:src/mbr88.asm | $(BD)
 	nasm -f bin $< -o $@
 
-$(BD)/mk_head:src/mk_head.c
-	wcl $< -o $@ 
+# This is built native since it's an intermediary file
+$(BD)/mk_head:src/mk_head.c | $(BD)
+	gcc -Wall $< -o $@ 
 
 $(BD)/mbr88.h:$(BD)/mk_head $(BD)/mbr88.bin
 	./$(BD)/mk_head $(BD)/mbr88.bin $(BD)/mbr88.h
 
-$(BD)/mbrpatch:src/mbrpatch.c $(BD)/mbr88.h
-	wcl -I$(BD) $< -o $@ 
+
+# Breakdown of owc compiler options
+#
+# -bt=dos  Build target = DOS (sets __DOS__)
+# -mt      Tiny memory model *.com files
+# -0       Generate 8088-safe code, no 186+ instructions
+# -os      Optimize size over speed
+# -zq      Squash the banner output
+# -fo=dir  Object file output directory
+# -fe=file Final executable path
+# -Idir    Include path
+$(BD)/mbrpatch.com:src/mbrpatch.c $(BD)/mbr88.h
+	wcl -bt=dos -mt -0 -os -zq -fo=$(BD)/ -fe=$@ -I$(BD) $<
 
 # Helpers ####################################################################
 clean:
