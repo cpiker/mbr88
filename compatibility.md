@@ -1,4 +1,4 @@
-# mbr88 OS Compatibility Notes
+# MBR88 OS Compatibility Notes
 
 This document surveys operating systems that a person might reasonably install on
 IBM XT-class (8088/8086) hardware, with notes on how each interacts with the
@@ -55,6 +55,44 @@ Several events will require running `mbrpatch` again after the fact:
 
 ## Operating System Survey
 
+### FreeDOS  (ongoing, open source)
+
+FreeDOS is a free, open-source DOS-compatible OS actively developed and tested on
+real 8088/8086 hardware.  It is fully compatible with mbr88 and has been verified
+working on the Leading Edge Model D test platform used to develop mbr88.
+
+**Partition types:** `0x01`, `0x04`, `0x06`
+
+**VBR `55 AA` signature:** Present.
+
+**MBR overwrite risk:** `FDISK /MBR` rewrites the MBR.  Same procedure as MS-DOS.
+
+**Bootable-flag behavior:** Same as MS-DOS.  FreeDOS `FDISK` enforces one active
+partition; use `mbrpatch -p` to restore multi-boot flags afterward.
+
+---
+
+### ELKS — Embeddable Linux Kernel Subset  (ongoing, open source)
+
+ELKS is a modern open-source project that ports a minimal Linux-like kernel to
+8086/8088 hardware.  It is designed with current best practices and full awareness
+of the MBR boot convention.
+
+ELKS has been verified working on the Leading Edge Model D test platform used to
+develop mbr88, including multi-partition coexistence with FreeDOS.
+
+**Partition type:** `0x80` (MINIX) is conventional for ELKS.
+
+**VBR `55 AA` signature:** Present.
+
+**MBR overwrite risk:** ELKS installation tools may write boot code to the MBR.
+Reinstall with `mbrpatch -u` if needed.
+
+**Bootable-flag behavior:** Standard.  Uses `0x80` for the bootable partition.
+Multi-boot with DOS and other systems works correctly with mbr88.
+
+---
+
 ### MS-DOS / PC-DOS 2.0 – 3.3  (1983 – 1987)
 
 The MBR and the `0x80` active-partition convention were introduced with PC DOS 2.0
@@ -75,23 +113,6 @@ mbr88 menu.
 
 **Bootable-flag behavior:** DOS `FDISK` enforces exactly one active partition.
 After using FDISK, run `mbrpatch -p` to re-flag any additional boot partitions.
-
----
-
-### FreeDOS  (ongoing, open source)
-
-FreeDOS is a free, open-source DOS-compatible OS actively developed and tested on
-real 8088/8086 hardware.  It is fully compatible with mbr88 and has been verified
-working on the Leading Edge Model D test platform used to develop mbr88.
-
-**Partition types:** `0x01`, `0x04`, `0x06`
-
-**VBR `55 AA` signature:** Present.
-
-**MBR overwrite risk:** `FDISK /MBR` rewrites the MBR.  Same procedure as MS-DOS.
-
-**Bootable-flag behavior:** Same as MS-DOS.  FreeDOS `FDISK` enforces one active
-partition; use `mbrpatch -p` to restore multi-boot flags afterward.
 
 ---
 
@@ -182,38 +203,18 @@ reinstall mbr88 and set bootable flags on the desired partitions.
 
 ---
 
-### ELKS — Embeddable Linux Kernel Subset  (ongoing, open source)
-
-ELKS is a modern open-source project that ports a minimal Linux-like kernel to
-8086/8088 hardware.  It is designed with current best practices and full awareness
-of the MBR boot convention.
-
-ELKS has been verified working on the Leading Edge Model D test platform used to
-develop mbr88, including multi-partition coexistence with FreeDOS.
-
-**Partition type:** `0x80` (MINIX) is conventional for ELKS.
-
-**VBR `55 AA` signature:** Present.
-
-**MBR overwrite risk:** ELKS installation tools may write boot code to the MBR.
-Reinstall with `mbrpatch -u` if needed.
-
-**Bootable-flag behavior:** Standard.  Uses `0x80` for the bootable partition.
-Multi-boot with DOS and other systems works correctly with mbr88.
-
----
 
 ## Compatibility Summary Table
 
 | Operating System     | VBR `55 AA` | MBR overwrite risk | Bootable flag | Multi-boot with DOS |
 |----------------------|-------------|-------------------|---------------|---------------------|
-| MS-DOS / PC-DOS 2–3  | ✓ Yes       | `FDISK /MBR`      | Standard      | ✓ Yes               |
 | FreeDOS              | ✓ Yes       | `FDISK /MBR`      | Standard      | ✓ Yes (tested)      |
+| ELKS                 | ✓ Yes       | Unsure            | Standard      | ✓ Yes (tested)      |
+| MS-DOS / PC-DOS 2–3  | ✓ Yes       | `FDISK /MBR`      | Standard      | ✓ Yes               |
 | DR-DOS / Novell DOS  | ✓ Yes       | `FDISK /MBR`      | Standard      | ✓ Yes               |
 | Windows 1.x / 2.x   | ✓ Yes       | Via DOS installer | Standard      | ✓ Yes (runs on DOS) |
 | CP/M-86              | ⚠ Maybe    | `HDMAINT.CMD`     | Non-standard  | ⚠ Possible          |
 | SCO Xenix            | ⚠ Maybe    | Installer         | Non-standard  | ⚠ Possible          |
-| ELKS                 | ✓ Yes       | Installer         | Standard      | ✓ Yes (tested)      |
 
 **Key:**
 - ✓ Yes — works reliably, may have been tested on real hardware
