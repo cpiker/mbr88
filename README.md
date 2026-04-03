@@ -4,7 +4,7 @@ modern operating systems. Includes an MBR patching tool that compiles natively
 for Linux, and cross compiles for [ELKS](https://github.com/ghaerr/elks) via
 [ia16-gcc](https://github.com/tkchia/gcc-ia16), and [FreeDOS](https://github.com/FDOS) 
 via [OpenWatcom](https://github.com/open-watcom).  MBR assembly is provided in
-NASM syntax.
+NASM syntax.  Linux man pages and FreeDOS help files are included.
 
 Safe for ELKS, but *don't use this yet on FreeDOS yet, currently still testing the
 Watcom build of mbrpatch.*
