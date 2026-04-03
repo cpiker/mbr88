@@ -9,12 +9,13 @@ NASM syntax.
 Safe for ELKS, but *don't use this yet on FreeDOS yet, currently still testing the
 Watcom build of mbrpatch.*
 
-The MBR reserves space within it's tiny 512 byte area for volume names to display
-in the boot menu.  MBR88 always presents a boot menu and waits for user input.  Since 
-it never auto-boots it's good for desktops, but not suitable for servers.  Only
-partitions marked with the 0x80 bootable flag appear in the menu but up to *four*
-partitions may be simultaneously marked as bootable.  The boot menu also allows for
-booting from a floppy even if it's installed on the first hardrive or or flash card.
+The MBR reserves space within it's tiny 512 byte area for a boot menu with editable
+partition labels (eleven characters max).  MBR88 always presents a boot menu and
+waits for a key press.  Since it never auto-boots it's good for desktops, but not
+suitable for servers.  Only partitions marked with the 0x80 bootable flag appear in
+the menu but up to *four* partitions may be simultaneously marked as bootable.  The
+boot menu also allows for booting from a floppy even the machine autoboots to a 
+hard disk first.
 
 ## Usage
 
