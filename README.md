@@ -1,10 +1,10 @@
 # MBR88
 An OS independent 8088 op-code clean MBR for dual booting ELKS, FreeDOS or even
-modern operating systems. Includes an MBR Patching tool compiles that natively
-for linux and cross compiles for [ELKS](https://github.com/ghaerr/elks) via
+modern operating systems. Includes an MBR patching tool that compiles natively
+for Linux, and cross compiles for [ELKS](https://github.com/ghaerr/elks) via
 [ia16-gcc](https://github.com/tkchia/gcc-ia16), and [FreeDOS](https://github.com/FDOS) 
 via [OpenWatcom](https://github.com/open-watcom).  MBR assembly is provided in
-NASM native syntax.
+NASM syntax.
 
 Safe for ELKS, but *don't use this yet on FreeDOS yet, currently still testing the
 Watcom build of mbrpatch.*
