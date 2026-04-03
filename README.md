@@ -14,8 +14,8 @@ partition labels (eleven characters max).  MBR88 always presents a boot menu and
 waits for a key press.  Since it never auto-boots it's good for desktops, but not
 suitable for servers.  Only partitions marked with the 0x80 bootable flag appear in
 the menu but up to *four* partitions may be simultaneously marked as bootable.  The
-boot menu also allows for booting from a floppy even the machine autoboots to a 
-hard disk first.
+boot menu also allows for booting from a floppy even when the machine autoboots to
+a hard disk first.
 
 ## Patching Tool Usage
 
