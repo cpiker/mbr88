@@ -2,7 +2,7 @@
 
 This document surveys operating systems that a person might reasonably install on
 IBM XT-class (8088/8086) hardware, with notes on how each interacts with the
-mbr88 boot record and the standard MBR partition table structure.
+MBR88 boot record and the standard MBR partition table structure.
 
 The focus is on coexistence: can multiple operating systems share a single
 partitioned hard disk and be independently selected from the mbr88 boot menu?
@@ -18,11 +18,11 @@ Each partition table entry contains a one-byte status field at offset 0 of the
 | `0x80` | Bootable / active              |
 | `0x00` | Not bootable / inactive        |
 
-mbr88 **only displays and boots partitions marked `0x80`**.  This is intentional:
+MBR88 **only displays and boots partitions marked `0x80`**.  This is intentional:
 it prevents accidentally handing control to a data partition whose VBR contains
 only a "not a bootable disk" stub message.
 
-**Unlike conventional MBR loaders, mbr88 permits more than one partition to be
+**Unlike conventional MBR loaders, MBR88 permits more than one partition to be
 marked `0x80` at the same time.**  All bootable partitions appear in the menu and
 can be selected freely.  The user sets which partitions are bootable using
 `mbrpatch`'s `b` command.
@@ -30,7 +30,7 @@ can be selected freely.  The user sets which partitions are bootable using
 Conventional tools such as DOS `FDISK` enforce a single active partition; they
 will clear the flag on all other partitions when they set one active.  After
 running such tools you will need to re-run `mbrpatch -p` to restore the flags on
-any additional partitions you want visible in the mbr88 menu.
+any additional partitions you want visible in the MBR88 menu.
 
 
 ## When to Re-run mbrpatch
@@ -38,8 +38,8 @@ any additional partitions you want visible in the mbr88 menu.
 Several events will require running `mbrpatch` again after the fact:
 
 - **Installing any OS that writes its own MBR boot code** — Xenix, some versions
-  of CP/M-86, and any modern OS installer (Linux, BSD) will overwrite the mbr88
-  boot record.  Run `mbrpatch -u` to reinstall mbr88, then `mbrpatch -p` to
+  of CP/M-86, and any modern OS installer (Linux, BSD) will overwrite the MBR88
+  boot record.  Run `mbrpatch -u` to reinstall MBR88, then `mbrpatch -p` to
   restore labels and bootable flags.
 
 - **Running DOS `FDISK`** — FDISK clears the active flag on all partitions except
@@ -47,7 +47,7 @@ Several events will require running `mbrpatch` again after the fact:
   additional partitions you want selectable.
 
 - **Running DOS `FDISK /MBR`** — This command rewrites the MBR boot code with the
-  standard DOS single-boot loader, erasing mbr88.  Run `mbrpatch -u` to restore.
+  standard DOS single-boot loader, erasing MBR88.  Run `mbrpatch -u` to restore.
 
 - **Adding or repartitioning** — Any time the partition table changes you should
   verify labels and bootable flags with `mbrpatch -p`.
@@ -58,8 +58,8 @@ Several events will require running `mbrpatch` again after the fact:
 ### FreeDOS  (ongoing, open source)
 
 FreeDOS is a free, open-source DOS-compatible OS actively developed and tested on
-real 8088/8086 hardware.  It is fully compatible with mbr88 and has been verified
-working on the Leading Edge Model D test platform used to develop mbr88.
+real 8088/8086 hardware.  It is fully compatible with MBR88 and has been verified
+working on the Leading Edge Model D test platform used to develop MBR88.
 
 **Partition types:** `0x01`, `0x04`, `0x06`
 
@@ -79,7 +79,7 @@ ELKS is a modern open-source project that ports a minimal Linux-like kernel to
 of the MBR boot convention.
 
 ELKS has been verified working on the Leading Edge Model D test platform used to
-develop mbr88, including multi-partition coexistence with FreeDOS.
+develop MBR88, including multi-partition coexistence with FreeDOS.
 
 **Partition type:** `0x80` (MINIX) is conventional for ELKS.
 
@@ -89,7 +89,7 @@ develop mbr88, including multi-partition coexistence with FreeDOS.
 Reinstall with `mbrpatch -u` if needed.
 
 **Bootable-flag behavior:** Standard.  Uses `0x80` for the bootable partition.
-Multi-boot with DOS and other systems works correctly with mbr88.
+Multi-boot with DOS and other systems works correctly with MBR88.
 
 ---
 
@@ -98,11 +98,11 @@ Multi-boot with DOS and other systems works correctly with mbr88.
 The MBR and the `0x80` active-partition convention were introduced with PC DOS 2.0
 specifically for the IBM PC XT.  All versions of MS-DOS and PC-DOS in this range
 use a standard FAT VBR with a `55 AA` boot signature and are fully compatible with
-mbr88.
+MBR88.
 
 Multiple DOS versions (e.g. PC-DOS 3.1 and MS-DOS 3.3) can coexist on separate
 FAT partitions.  Each can be marked `0x80` and selected independently from the
-mbr88 menu.
+MBR88 menu.
 
 **Partition types:** `0x01` (FAT12), `0x04` (FAT16 <32 MB), `0x06` (FAT16 ≥32 MB)
 
@@ -159,21 +159,21 @@ the standardized MBR partition scheme and has its own partitioning conventions.
 **Partition type:** `0xDB` (CP/M, Concurrent CP/M, Concurrent DOS)
 
 **VBR `55 AA` signature:** Not reliably present.  Early CP/M-86 boot sectors
-predate the `55 AA` convention and may not carry the signature.  mbr88 checks for
+predate the `55 AA` convention and may not carry the signature.  MBR88 checks for
 `55 AA` before jumping to the VBR; a CP/M-86 partition without the signature will
 be reported as "No boot record" rather than booting.  Whether a given CP/M-86
 installation has the signature depends on the specific version and how it was
 installed.
 
 **MBR overwrite risk:** CP/M-86's `HDMAINT.CMD` disk setup tool may write its own
-boot code to the MBR.  Reinstall mbr88 with `mbrpatch -u` afterward.
+boot code to the MBR.  Reinstall MBR88 with `mbrpatch -w` afterward.
 
 **Bootable-flag behavior:** CP/M-86's installer may set the status byte to a
-non-standard value.  Verify with `mbrpatch -p` after installation.
+non-standard value.  Verify with `mbrpatch -r` after installation.
 
 **Coexistence with DOS:** Structurally possible — CP/M-86 uses its own partition
 type and the partition table is shared.  In practice, run CP/M-86 installation
-first, then reinstall mbr88, then add the DOS partitions.
+first, then reinstall MBR88, then add the DOS partitions.
 
 ---
 
@@ -188,18 +188,18 @@ same disk.
 
 **VBR `55 AA` signature:** Version-dependent.  Unix systems of this era did not
 always carry the `55 AA` signature in the partition boot sector.  As with CP/M-86,
-a missing signature will cause mbr88 to report "No boot record."  Testing with
+a missing signature will cause MBR88 to report "No boot record."  Testing with
 your specific Xenix version and install media is necessary.
 
 **MBR overwrite risk:** High.  Xenix installs its own boot loader into the MBR.
-Reinstall mbr88 with `mbrpatch -u` after completing the Xenix installation.
+Reinstall MBR88 with `mbrpatch -w` after completing the Xenix installation.
 
 **Bootable-flag behavior:** Xenix may set the status byte differently from the
 DOS convention.  Verify and correct with `mbrpatch -p` after installation.
 
 **Coexistence with DOS:** Possible but requires care.  Install Xenix first (it
 will partition and write its MBR), then install DOS into a separate partition, then
-reinstall mbr88 and set bootable flags on the desired partitions.
+reinstall MBR88 and set bootable flags on the desired partitions.
 
 ---
 
