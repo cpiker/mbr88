@@ -17,7 +17,7 @@ the menu but up to *four* partitions may be simultaneously marked as bootable.  
 boot menu also allows for booting from a floppy even the machine autoboots to a 
 hard disk first.
 
-## Usage
+## Patching Tool Usage
 
 ```bash
 mbrpatch -r mbr.bin /dev/hda     # read live MBR to file (ELKS / Linux)
