@@ -19,17 +19,19 @@ booting from a floppy even if it's installed on the first hardrive or or flash c
 ## Usage
 
 ```bash
-mbrpatch -r backup.bin /dev/hda     # read live MBR to file (ELKS / Linux)
-mbrpatch -r backup.bin 80h          # read live MBR to file (FreeDOS)
+mbrpatch -r mbr.bin /dev/hda     # read live MBR to file (ELKS / Linux)
+mbrpatch -r mbr.bin 80h          # read live MBR to file (FreeDOS)
 
-mbrpatch -r backup.bin /dev/hda     # inspect the partition table
+mbrpatch mbr.bin                 # view the partition table
 
-mbrpatch -u mbr.bin                 # upgrade old MBR to MBR88, then edit
-mbrpatch -w mbr.bin /dev/hda        # write MBR to disk (ELKS / Linux)
-mbrpatch -w mbr.bin 80h             # write MBR to disk (FreeDOS)
-mbrpatch -n new.bin                 # create a fresh MBR88 image
+mbrpatch -p mbr.bin              # patch in new partitions or a disk ID
+mbrpatch -u mbr.bin              # upgrade old MBR to MBR88, then edit
+mbrpatch -n new.bin              # create a fresh MBR88 image
+
+mbrpatch -w mbr.bin /dev/hda     # write MBR to disk (ELKS / Linux)
+mbrpatch -w mbr.bin 80h          # write MBR to disk (FreeDOS)
 ```
-Windows NT disk IDs are supported and may be modified if desired.
+Windows NT and Linux disk IDs are supported and may be modified if desired.
 
 ## GPT, LILO and GRUB
 
