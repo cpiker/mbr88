@@ -48,8 +48,9 @@
  * Build (cross-compile for ELKS, ia16-elf-gcc):
  *   ia16-elf-gcc -melks -Os -o mbrpatch mbrpatch.c
  *
- * Build (FreeDOS, Open Watcom -- model TBD: tiny or small):
- *   wcl -ms mbrpatch.c -o mbrpatch.exe
+ * Build (FreeDOS, Open Watcom 2 -- tiny model .com):
+ *   wcl -bt=dos -mt -0 -os -zq -fo=build/freedos/ \
+ *       -fe=build/freedos/mbrpatch.com -Ibuild/freedos src/mbrpatch.c
  *
  * Disk I/O (-r / -w modes):
  *   Linux / ELKS: the disk device is a path (/dev/hda, /dev/cda
@@ -1187,23 +1188,191 @@ static void offer_diskid(void)
  *                cmd_write, cmd_help
  */
 
+/* bios_get_drive_params -- query INT 13h/08h for one drive.
+ *
+ * Compiled only for 16-bit real-mode targets (ELKS and FreeDOS/Watcom).
+ * On both targets we use inline assembly rather than Watcom's _bios_disk(),
+ * because _bios_disk() does not wrap INT 13h/08h.  The Watcom __asm block
+ * and the GCC-style __asm__ block are dialect-separated by #ifdef but the
+ * surrounding logic is shared.
+ *
+ * INT 13h, AH=08h: Get Drive Parameters
+ *   In:  AH = 08h, DL = drive number (80h-FFh for hard disks)
+ *   Out: CF set on error; AH = status (non-zero = error)
+ *        CH = low 8 bits of max cylinder number
+ *        CL bits 5-0 = max sector number (1-based)
+ *        CL bits 7-6 = high 2 bits of max cylinder (gives 10-bit total)
+ *        DH = max head number (0-based, so actual count = DH + 1)
+ *        DL = number of drives on this controller
+ *
+ * We push/pop ES and DI because INT 13h/08h may trash them on some BIOSes
+ * (documented behaviour for floppy drives; harmless precaution for hard
+ * disks).
+ *
+ * Returns 1 on success, 0 on BIOS error.
+ * *max_cyl, *max_head are 0-based; *max_sec is 1-based (sector numbering
+ * starts at 1 in CHS).  Caller adds 1 to cyl/head for the actual count.
+ */
+#if defined(__WATCOMC__) || defined(__ia16__)
+
+static int bios_get_drive_params(
+	unsigned char drive,
+	int *max_cyl, int *max_head, int *max_sec, int *num_drives)
+{
+	unsigned int ax_out, cx_out, dx_out, carry;
+
+#if defined(__WATCOMC__)
+	/* Open Watcom inline assembly.  SBB reg,reg sets reg to 0xFFFF if
+	 * carry is set, 0 if clear -- used here to capture the CF state
+	 * before any other instruction can disturb it. */
+	__asm {
+		push es
+		push di
+		mov  ax, 0x0800
+		mov  dl, drive
+		int  0x13
+		mov  ax_out, ax
+		mov  cx_out, cx
+		mov  dx_out, dx
+		sbb  carry, carry
+		pop  di
+		pop  es
+	}
+#else
+	/* ia16-elf-gcc GCC-style inline assembly.
+	 * The carry flag is captured into 'carry' via SBB; the other output
+	 * registers are pinned with explicit constraints.  AH is in the high
+	 * byte of ax_out; we check it separately for non-zero error status. */
+	__asm__ __volatile__ (
+		"push %%es\n\t"
+		"push %%di\n\t"
+		"int  $0x13\n\t"
+		"sbb  %[car], %[car]\n\t"
+		"pop  %%di\n\t"
+		"pop  %%es"
+		: "=a" (ax_out), "=c" (cx_out), "=d" (dx_out), [car] "=r" (carry)
+		: "0" ((unsigned int)0x0800), "2" ((unsigned int)drive)
+		: "bx", "memory"
+	);
+#endif
+
+	/* Treat carry set OR AH != 0 as failure */
+	if (carry || (ax_out & 0xFF00))
+		return 0;
+
+	/* Unpack: cylinder is 10 bits: CH = low 8, CL[7:6] = high 2 */
+	*max_cyl    = (int)(((cx_out >> 8) & 0xFF) | ((cx_out & 0xC0) << 2));
+	*max_sec    = (int)(cx_out & 0x3F);           /* 1-based sector count */
+	*max_head   = (int)((dx_out >> 8) & 0xFF);    /* 0-based head max     */
+	*num_drives = (int)(dx_out & 0xFF);
+	return 1;
+}
+
+#endif /* __WATCOMC__ || __ia16__ */
+
 static void cmd_geometry(void)
 {
 	printf("\n");
 	printf("Drive geometry converts CHS addresses to LBA sector numbers.\n\n");
-	printf("IBM XT default: %d heads per cylinder, %d sectors per track.\n",
-		DEFAULT_HEADS, DEFAULT_SECTORS);
-	printf("Check your drive spec or use values reported by fdisk.\n\n");
 
-	if (ask_yn("Use IBM XT default geometry (16H / 17S)? (Y/N): ")) {
-		geo_heads   = DEFAULT_HEADS;
-		geo_sectors = DEFAULT_SECTORS;
-	} else {
-		geo_heads   = ask_int("  Heads per cylinder (1-255): ", 1, 255);
-		geo_sectors = ask_int("  Sectors per track  (1-63):  ", 1, 63);
+#if defined(__WATCOMC__) || defined(__ia16__)
+	/* On 16-bit targets, offer a live BIOS query before manual entry.
+	 * The user opted in, so the label on the output is the only context
+	 * needed -- no separate disclaimer paragraph required. */
+	if (ask_yn("Show BIOS-reported geometry for this machine? (Y/N): ")) {
+		int drive, max_cyl, max_head, max_sec, num_drives;
+		int found  = 0;
+		char choice_buf[8];
+
+		printf("\n  BIOS geometry (this machine):\n");
+		printf("  %-6s  %-10s  %-8s  %-8s\n",
+			"Drive", "Cylinders", "Heads", "Sec/Trk");
+		printf("  ------  ----------  --------  --------\n");
+
+		/* Probe 80h and 81h.  Stopping at 81h is intentional: probing
+		 * beyond 81h hangs some BIOSes, and the partition table only
+		 * addresses one disk at a time anyway. */
+		for (drive = 0x80; drive <= 0x81; drive++) {
+			int ok = bios_get_drive_params(
+				(unsigned char)drive,
+				&max_cyl, &max_head, &max_sec, &num_drives);
+			if (!ok) break;   /* no more drives on this controller */
+			/* Add 1 to 0-based cyl and head counts for display */
+			printf("  %02Xh     %-10d  %-8d  %-8d\n",
+				drive,
+				max_cyl  + 1,
+				max_head + 1,
+				max_sec);
+			found = 1;
+			if (num_drives <= 1) break;  /* BIOS says only one drive */
+		}
+
+		if (!found) {
+			printf("  (BIOS reported no hard drives)\n");
+		} else {
+			int chosen_h = 0, chosen_s = 0;
+
+			printf("\n");
+			printf("  Enter drive number to use as geometry source\n");
+			printf("  (80 or 81), or press Enter for manual entry: ");
+			fflush(stdout);
+
+			if (read_line(choice_buf, sizeof(choice_buf))
+					&& choice_buf[0]) {
+				int drv = (int)strtol(choice_buf, NULL, 16);
+				if (drv == 0x80 || drv == 0x81) {
+					int ok = bios_get_drive_params(
+						(unsigned char)drv,
+						&max_cyl, &max_head, &max_sec,
+						&num_drives);
+					if (ok) {
+						chosen_h = max_head + 1;
+						chosen_s = max_sec;
+					} else {
+						printf("  Could not read drive %02Xh.\n", drv);
+					}
+				} else {
+					printf("  Unrecognised drive -- using manual entry.\n");
+				}
+			}
+
+			if (chosen_h) {
+				/* Confirm or let the user override each field */
+				printf("\n");
+				printf("  Heads per cylinder [%d]: ", chosen_h);
+				fflush(stdout);
+				read_line(choice_buf, sizeof(choice_buf));
+				if (choice_buf[0]) {
+					int v = atoi(choice_buf);
+					if (v >= 1 && v <= 255) chosen_h = v;
+					else printf("  Out of range -- keeping %d.\n", chosen_h);
+				}
+
+				printf("  Sectors per track  [%d]: ", chosen_s);
+				fflush(stdout);
+				read_line(choice_buf, sizeof(choice_buf));
+				if (choice_buf[0]) {
+					int v = atoi(choice_buf);
+					if (v >= 1 && v <= 63) chosen_s = v;
+					else printf("  Out of range -- keeping %d.\n", chosen_s);
+				}
+
+				geo_heads   = chosen_h;
+				geo_sectors = chosen_s;
+				printf("  Geometry set: %dH / %dS.\n",
+					geo_heads, geo_sectors);
+				return;
+			}
+			/* User pressed Enter -- fall through to manual entry below */
+		}
 	}
-	printf("  Geometry set: %d heads, %d sectors/track.\n",
-		geo_heads, geo_sectors);
+	printf("\n");
+#endif /* __WATCOMC__ || __ia16__ */
+
+	/* Manual entry -- all platforms, and fallback when BIOS skipped/failed */
+	geo_heads   = ask_int("  Heads per cylinder (1-255): ", 1, 255);
+	geo_sectors = ask_int("  Sectors per track  (1-63):  ", 1, 63);
+	printf("  Geometry set: %dH / %dS.\n", geo_heads, geo_sectors);
 }
 
 static void cmd_new(void)
@@ -1217,7 +1386,7 @@ static void cmd_new(void)
 
 	if (!geo_heads) {
 		printf("  Geometry not set -- run 'g' first.\n");
-		return;
+		return;   /* no redraw -- nothing changed */
 	}
 
 	slot = ask_slot("  Partition number (1-4): ");
@@ -1266,6 +1435,7 @@ static void cmd_new(void)
 	memcpy(mbr + off, entry, ENTRY_SIZE);
 	dirty = 1;
 	printf("  Partition %d defined.\n", slot);
+	print_table();   /* redraw here; main loop must not also redraw for 'n' */
 }
 
 static void cmd_delete(void)
@@ -1523,7 +1693,7 @@ static void cmd_write(void)
 		if (mbr[PTABLE_OFFSET + i * ENTRY_SIZE + 4] != 0)
 			active++;
 
-	printf("  %d active partition(s).  Write changes to '%s'? (Y/N): ",
+	printf("  %d defined partition(s).  Write changes to '%s'? (Y/N): ",
 		active, mbr_path);
 	fflush(stdout);
 	{
@@ -2155,7 +2325,7 @@ int main(int argc, char *argv[])
 				continue;
 			return 0;
 		case 'g': case 'G':  cmd_geometry(); redraw=1; break;
-		case 'n': case 'N':  cmd_new();      redraw=1; break;
+		case 'n': case 'N':  cmd_new();               break;
 		case 'd': case 'D':  cmd_delete();   redraw=1; break;
 		case 't': case 'T':  cmd_set_type(); redraw=1; break;
 		case 'b': case 'B':  cmd_bootable(); redraw=1; break;
