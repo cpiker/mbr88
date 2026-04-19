@@ -57,10 +57,22 @@
  *     etc.) opened with open()/read()/write() -- same as any file.
  *     Writing sector 0 requires root permissions on Linux/ELKS.
  *   FreeDOS (Open Watcom): no device-file namespace exists.  The disk is
- *     identified by its BIOS drive number (0x80 = first hard disk, 0x81 =
- *     second, etc.) given as a hex string on the command line (e.g. '80h'
- *     or '0x80').  _bios_disk() from <bios.h> is used for the actual I/O,
- *     requiring no inline assembly.
+ *     identified by an ordinal drive number (1 = first hard disk, 2 = second)
+ *     on the command line.  The legacy BIOS hex forms '80h' / '0x80' are also
+ *     accepted for backward compatibility.  _bios_disk() from <bios.h> is
+ *     used for the actual I/O, requiring no inline assembly.
+ *
+ * Command-line prefix convention:
+ *   Linux / ELKS: '-' prefix only (e.g. -r, -w, -h).
+ *   FreeDOS:      '/' prefix preferred (e.g. /R, /W, /?), following DOS
+ *                 convention; '-' prefix also accepted for familiarity.
+ *                 '/?' is the primary help trigger; '/H' is a silent alias.
+ *
+ * Switch letter case:
+ *   All switch comparisons are case-insensitive on both platforms.
+ *   DOS canonical form uses uppercase (/R, /W, /P, /U, /N, /H, /?).
+ *   Linux canonical form uses lowercase (-r, -w, -p, -u, -n, -h).
+ *   The non-canonical case works silently but is not shown in help text.
  *
  * Design notes for ELKS / Open Watcom:
  *   - No malloc/heap: all buffers are static globals or small stack locals.
@@ -98,6 +110,7 @@
  *   SEC:COMMANDS         cmd_geometry through cmd_help
  *   SEC:HELPTEXT         print_help (full and minimal variants)
  *   SEC:DISKIO           disk_read_mbr, disk_write_mbr (platform-specific)
+ *   SEC:ARGPARSE         Command-line argument parsing (platform-split)
  *   SEC:MAIN             main()
  */
 
@@ -1225,19 +1238,21 @@ static int bios_get_drive_params(
 	/* Open Watcom inline assembly.  SBB reg,reg sets reg to 0xFFFF if
 	 * carry is set, 0 if clear -- used here to capture the CF state
 	 * before any other instruction can disturb it. */
-	__asm {
-		push es
-		push di
-		mov  ax, 0x0800
-		mov  dl, drive
-		int  0x13
-		mov  ax_out, ax
-		mov  cx_out, cx
-		mov  dx_out, dx
-		sbb  carry, carry
-		pop  di
-		pop  es
-	}
+   __asm {
+      push es
+      push di
+      mov  ax, 0x0800
+      mov  dl, drive
+      int  0x13
+      mov  ax_out, ax
+      mov  cx_out, cx
+      mov  dx_out, dx
+      mov  bx, 0
+      sbb  bx, bx        /* BX = 0xFFFF if CF set, 0 if clear */
+      mov  carry, bx
+      pop  di
+      pop  es
+   }
 #else
 	/* ia16-elf-gcc GCC-style inline assembly.
 	 * The carry flag is captured into 'carry' via SBB; the other output
@@ -1285,21 +1300,21 @@ static void cmd_geometry(void)
 		char choice_buf[8];
 
 		printf("\n  BIOS geometry (this machine):\n");
-		printf("  %-6s  %-10s  %-8s  %-8s\n",
+		printf("  %-8s  %-10s  %-8s  %-8s\n",
 			"Drive", "Cylinders", "Heads", "Sec/Trk");
-		printf("  ------  ----------  --------  --------\n");
+		printf("  --------  ----------  --------  --------\n");
 
-		/* Probe 80h and 81h.  Stopping at 81h is intentional: probing
-		 * beyond 81h hangs some BIOSes, and the partition table only
-		 * addresses one disk at a time anyway. */
+		/* Probe drives 1 and 2 (BIOS 80h, 81h).  Stopping at 81h is
+		 * intentional: probing beyond 81h hangs some BIOSes, and the
+		 * partition table only addresses one disk at a time anyway. */
 		for (drive = 0x80; drive <= 0x81; drive++) {
 			int ok = bios_get_drive_params(
 				(unsigned char)drive,
 				&max_cyl, &max_head, &max_sec, &num_drives);
 			if (!ok) break;   /* no more drives on this controller */
 			/* Add 1 to 0-based cyl and head counts for display */
-			printf("  %02Xh     %-10d  %-8d  %-8d\n",
-				drive,
+			printf("  Drive %-2d  %-10d  %-8d  %-8d\n",
+				drive - 0x7F,   /* 0x80->1, 0x81->2 */
 				max_cyl  + 1,
 				max_head + 1,
 				max_sec);
@@ -1313,13 +1328,13 @@ static void cmd_geometry(void)
 			int chosen_h = 0, chosen_s = 0;
 
 			printf("\n");
-			printf("  Enter drive number to use as geometry source\n");
-			printf("  (80 or 81), or press Enter for manual entry: ");
+			printf("  Enter drive number (1 or 2), or press Enter for manual entry: ");
 			fflush(stdout);
 
 			if (read_line(choice_buf, sizeof(choice_buf))
 					&& choice_buf[0]) {
-				int drv = (int)strtol(choice_buf, NULL, 16);
+				/* Accept ordinal (1/2) or legacy hex (80h/81h) */
+				int drv = disk_parse_drive(choice_buf);
 				if (drv == 0x80 || drv == 0x81) {
 					int ok = bios_get_drive_params(
 						(unsigned char)drv,
@@ -1329,7 +1344,8 @@ static void cmd_geometry(void)
 						chosen_h = max_head + 1;
 						chosen_s = max_sec;
 					} else {
-						printf("  Could not read drive %02Xh.\n", drv);
+						printf("  Could not read Drive %d (BIOS %02Xh).\n",
+							drv - 0x7F, drv);
 					}
 				} else {
 					printf("  Unrecognised drive -- using manual entry.\n");
@@ -1737,16 +1753,22 @@ static void cmd_write(void)
 	}
 
 	fd = open(mbr_path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, OPEN_MODE);
-	if (fd < 0) { perror(mbr_path); return; }
+	if (fd < 0) {
+		perror(mbr_path);
+		fprintf(stderr, "  !!! Changes were NOT written.\n");
+		return;
+	}
 	n = write(fd, mbr, MBR_SIZE);
 	close(fd);
 	if (n != MBR_SIZE) {
 		fprintf(stderr, "Error: short write.\n");
+		fprintf(stderr, "  !!! Changes were NOT written.\n");
 		return;
 	}
 
 	printf("  Written to '%s'.  %d active, %d empty.\n",
 		mbr_path, active, NUM_ENTRIES - active);
+	puts("  Use 'q' to quit or other commands to continue editing.");
 	dirty       = 0;
 	file_exists = 1;
 }
@@ -1779,14 +1801,18 @@ static void cmd_help(void)
 static void print_help(void)
 {
 	puts("mbrpatch <file>                   view MBR image file");
+#ifdef __WATCOMC__
+	puts("mbrpatch /P <file>                patch MBR image file");
+	puts("mbrpatch /U <file>                upgrade MBR image to mbr88");
+	puts("mbrpatch /N <file>                create new blank mbr88 image");
+	puts("mbrpatch /R <file> <drive>        read disk MBR to file");
+	puts("  drive: 1=hard disk 1, 2=hard disk 2 (or legacy: 80h, 81h)");
+	puts("mbrpatch /W <file> <drive>        write file to disk MBR");
+	puts("mbrpatch /?                       this help text");
+#else
 	puts("mbrpatch -p <file>                patch MBR image file");
 	puts("mbrpatch -u <file>                upgrade MBR image to mbr88");
 	puts("mbrpatch -n <file>                create new blank mbr88 image");
-#ifdef __WATCOMC__
-	puts("mbrpatch -r <file> <drive>        read disk MBR to file");
-	puts("  drive: 80h=hard disk 1, 81h=hard disk 2, etc.");
-	puts("mbrpatch -w <file> <drive>        write file to disk MBR");
-#else
 	puts("mbrpatch -r <file> <device>       read disk MBR to file");
 	puts("mbrpatch -w <file> <device>       write file to disk MBR");
 #endif
@@ -1831,8 +1857,7 @@ static void print_help(void)
 	puts("  -r         Read disk MBR.  Reads the first sector of <device>,");
 	puts("             displays the partition table, and saves it to <mbr_file>.");
 	puts("             The output file must not already exist (safety check).");
-	puts("             On Linux/ELKS: device is a path, e.g. /dev/sda, /dev/hda.");
-	puts("             On FreeDOS: device is the BIOS drive number, e.g. 80h.");
+	puts("             Device is a path to the block device, e.g. /dev/sda.");
 	puts("");
 	puts("  -w         Write disk MBR.  Loads <mbr_file>, displays the partition");
 	puts("             table, asks for confirmation, then writes the 512-byte");
@@ -1881,11 +1906,9 @@ static void print_help(void)
 	puts("");
 	puts("Examples:");
 	puts("  mbrpatch mbr.bin                    view current partition table");
-	puts("  mbrpatch -r backup.bin /dev/hda     read live MBR to file (Linux)");
-	puts("  mbrpatch -r backup.bin 80h          read live MBR to file (FreeDOS)");
+	puts("  mbrpatch -r backup.bin /dev/sda     read live MBR to file");
 	puts("  mbrpatch -u mbr.bin                 upgrade to MBR88, then edit");
-	puts("  mbrpatch -w mbr.bin /dev/hda        write MBR to disk (Linux)");
-	puts("  mbrpatch -w mbr.bin 80h             write MBR to disk (FreeDOS)");
+	puts("  mbrpatch -w mbr.bin /dev/sda        write MBR to disk");
 	puts("  mbrpatch -n new.bin                 create a fresh MBR88 image");
 }
 
@@ -1895,16 +1918,29 @@ static void print_help(void)
  * SEC:DISKIO -- disk_read_mbr, disk_write_mbr (platform-specific)
  *
  * On Linux / ELKS the caller passes a device path string (/dev/sda etc.).
- * On FreeDOS (Open Watcom) the caller passes a BIOS drive number string
- * such as "80h", "0x80", or "128" -- all meaning the first hard disk.
+ * On FreeDOS (Open Watcom) the caller passes a drive specifier string.
+ * Preferred form: "1" (first hard disk) or "2" (second hard disk).
+ * Legacy hex forms "80h" / "0x80" are also accepted; disk_parse_drive()
+ * handles all forms and maps them to the BIOS drive byte (0x80 / 0x81).
  */
 
-#ifdef __WATCOMC__
+#if defined(__WATCOMC__) || defined(__ia16__)
 
-/* Parse a BIOS drive number from a string.
- * Accepts: "80h" / "80H" (hex without 0x prefix, trailing h),
- *          "0x80" / "0X80" (C-style hex), plain decimal "128".
- * Returns the drive number, or -1 if the string is not parseable. */
+/* Parse a drive specifier from a string.
+ *
+ * Pure C -- no platform-specific calls.  Shared by both 16-bit targets:
+ * cmd_geometry() (WATCOMC + ia16) and disk_read/write_mbr (WATCOMC only).
+ *
+ * Preferred (user-facing) forms:
+ *   "1"          -> 0x80  (first hard disk, BIOS drive 80h)
+ *   "2"          -> 0x81  (second hard disk, BIOS drive 81h)
+ *
+ * Legacy forms accepted for backward compatibility:
+ *   "80h"/"80H"  hex with trailing h suffix
+ *   "0x80"/"81h" C-style hex prefix
+ *   "128"/"129"  plain decimal BIOS drive number
+ *
+ * Returns the BIOS drive byte (0x80-0xFF), or -1 if unparseable. */
 static int disk_parse_drive(const char *s)
 {
 	char buf[8];
@@ -1915,7 +1951,13 @@ static int disk_parse_drive(const char *s)
 	len = (int)strlen(s);
 	if (len == 0 || len > 6) return -1;
 
-	/* Copy to mutable buffer, strip trailing h/H */
+	/* Ordinal shorthand: "1" and "2" map directly to BIOS drive bytes.
+	 * Check before the general hex/decimal path to keep the common case fast
+	 * and to avoid "1" being parsed as decimal 1 (which is below 0x80). */
+	if (len == 1 && s[0] == '1') return 0x80;
+	if (len == 1 && s[0] == '2') return 0x81;
+
+	/* Legacy hex/decimal path: copy to mutable buffer, strip trailing h/H */
 	for (i = 0; i < len && i < (int)sizeof(buf)-1; i++)
 		buf[i] = s[i];
 	buf[len < (int)sizeof(buf) ? len : (int)sizeof(buf)-1] = '\0';
@@ -1930,6 +1972,10 @@ static int disk_parse_drive(const char *s)
 	return (int)val;
 }
 
+#endif /* __WATCOMC__ || __ia16__ */
+
+#ifdef __WATCOMC__
+
 static int disk_read_mbr(const char *device, unsigned char *buf)
 {
 	struct diskinfo_t di;
@@ -1939,8 +1985,9 @@ static int disk_read_mbr(const char *device, unsigned char *buf)
 	drive = disk_parse_drive(device);
 	if (drive < 0) {
 		fprintf(stderr,
-			"Error: '%s' is not a valid drive number.\n"
-			"  Use 80h for the first hard disk, 81h for the second, etc.\n",
+			"Error: '%s' is not a valid drive specifier.\n"
+			"  Use 1 for the first hard disk, 2 for the second.\n"
+			"  Legacy BIOS forms (80h, 81h) are also accepted.\n",
 			device);
 		return 1;
 	}
@@ -1968,8 +2015,9 @@ static int disk_write_mbr(const char *device, const unsigned char *buf)
 	drive = disk_parse_drive(device);
 	if (drive < 0) {
 		fprintf(stderr,
-			"Error: '%s' is not a valid drive number.\n"
-			"  Use 80h for the first hard disk, 81h for the second, etc.\n",
+			"Error: '%s' is not a valid drive specifier.\n"
+			"  Use 1 for the first hard disk, 2 for the second.\n"
+			"  Legacy BIOS forms (80h, 81h) are also accepted.\n",
 			device);
 		return 1;
 	}
@@ -2082,18 +2130,109 @@ int main(int argc, char *argv[])
 	setmode(fileno(stderr), O_TEXT);
 #endif
 
-	/* -h / --help */
-	if (argc == 2 &&
-		(strcmp(argv[1],"-h")==0 || strcmp(argv[1],"--help")==0)) {
-		print_help();
-		return 0;
+/* ***************************************************************************
+ * SEC:ARGPARSE -- Command-line argument parsing (platform-split)
+ *
+ * Switch prefix convention:
+ *   Linux / ELKS: '-' only  (e.g. -r, -w, -p, -u, -n, -h)
+ *   FreeDOS:      '/' preferred (e.g. /R, /W, /P, /U, /N, /?)
+ *                 '-' also accepted on FreeDOS for familiarity
+ *
+ * Switch letter matching is case-insensitive on all platforms.
+ * The non-canonical case (uppercase on Linux, lowercase on DOS) works
+ * silently but is not shown in any help text.
+ *
+ * Argument order for all modes:  mbrpatch <flag> <mbr_file> [<device>]
+ * The -r / -w (or /R / /W) modes take file then device; all others take
+ * file only.
+ */
+
+	/* Help check: must come before the general switch parse.
+	 *   Linux / ELKS: -h  --help
+	 *   FreeDOS:      /?  /H  (also /h, -h, --help accepted silently) */
+	if (argc == 2) {
+		const char *a = argv[1];
+#ifdef __WATCOMC__
+		if ((a[0]=='/' && (a[1]=='?' || a[1]=='H' || a[1]=='h') && a[2]=='\0') ||
+		    (a[0]=='-' && (a[1]=='h' || a[1]=='H') && a[2]=='\0') ||
+		    strcmp(a,"--help")==0) {
+#else
+		if ((a[0]=='-' && (a[1]=='h' || a[1]=='H') && a[2]=='\0') ||
+		    strcmp(a,"--help")==0) {
+#endif
+			print_help();
+			return 0;
+		}
 	}
 
-	/* Parse mode flag.  All options are single characters after '-' so we
-	 * switch on argv[1][1].  The -r and -w cases take two arguments
-	 * (file then device); all other flagged modes take one (file). */
+#ifdef __WATCOMC__
+	/* FreeDOS argument parsing.
+	 * Accepts '/' or '-' prefix; switch letter is matched case-insensitively.
+	 * Canonical DOS form uses uppercase (/R, /W, /P, /U, /N, /?). */
+	if (argc >= 2 &&
+	    (argv[1][0] == '/' || argv[1][0] == '-') &&
+	    argv[1][1] != '\0') {
+		char sw = argv[1][1];
+		/* Fold to lowercase for the comparison */
+		if (sw >= 'A' && sw <= 'Z') sw = sw + ('a' - 'A');
+		switch (sw) {
+		case 'r':
+		case 'w':
+			if (argc != 4) {
+				fprintf(stderr,
+					"Usage: mbrpatch %c%c <mbr_file> <drive>\n",
+					argv[1][0], argv[1][1]);
+				return 1;
+			}
+			if (sw == 'r') mode_read  = 1;
+			else            mode_write = 1;
+			strncpy(mbr_path,    argv[2], sizeof(mbr_path)    - 1);
+			strncpy(disk_device, argv[3], sizeof(disk_device) - 1);
+			mbr_path[sizeof(mbr_path)-1]       = '\0';
+			disk_device[sizeof(disk_device)-1] = '\0';
+			break;
+		case 'p':
+		case 'u':
+		case 'n':
+			if (argc != 3) {
+				fprintf(stderr,
+					"Usage: mbrpatch %c%c <mbr_file>\n",
+					argv[1][0], argv[1][1]);
+				return 1;
+			}
+			if (sw == 'p') mode_patch   = 1;
+			if (sw == 'u') mode_upgrade = 1;
+			if (sw == 'n') mode_new     = 1;
+			strncpy(mbr_path, argv[2], sizeof(mbr_path) - 1);
+			mbr_path[sizeof(mbr_path)-1] = '\0';
+			break;
+		default:
+			fprintf(stderr, "Unknown option '%s'.\n", argv[1]);
+			fprintf(stderr,
+				"Usage: mbrpatch [/P|/U|/N] <mbr_file>\n"
+				"       mbrpatch /R|/W <mbr_file> <drive>\n"
+				"       mbrpatch /?\n");
+			return 1;
+		}
+	} else if (argc == 2) {
+		mode_view = 1;
+		strncpy(mbr_path, argv[1], sizeof(mbr_path) - 1);
+		mbr_path[sizeof(mbr_path)-1] = '\0';
+	} else {
+		fprintf(stderr,
+			"Usage: mbrpatch [/P|/U|/N] <mbr_file>\n"
+			"       mbrpatch /R|/W <mbr_file> <drive>\n"
+			"       mbrpatch /?\n");
+		return 1;
+	}
+
+#else  /* Linux / ELKS: '-' prefix, case-insensitive switch letter */
+
 	if (argc >= 2 && argv[1][0] == '-' && argv[1][1] != '\0') {
-		switch (argv[1][1]) {
+		char sw = argv[1][1];
+		/* Fold to lowercase for the comparison */
+		if (sw >= 'A' && sw <= 'Z') sw = sw + ('a' - 'A');
+		switch (sw) {
 		case 'r':
 		case 'w':
 			if (argc != 4) {
@@ -2102,8 +2241,8 @@ int main(int argc, char *argv[])
 					argv[1]);
 				return 1;
 			}
-			if (argv[1][1] == 'r') mode_read  = 1;
-			else                    mode_write = 1;
+			if (sw == 'r') mode_read  = 1;
+			else            mode_write = 1;
 			strncpy(mbr_path,    argv[2], sizeof(mbr_path)    - 1);
 			strncpy(disk_device, argv[3], sizeof(disk_device) - 1);
 			mbr_path[sizeof(mbr_path)-1]       = '\0';
@@ -2116,11 +2255,9 @@ int main(int argc, char *argv[])
 				fprintf(stderr, "Usage: mbrpatch %s <mbr_file>\n", argv[1]);
 				return 1;
 			}
-			switch (argv[1][1]) {
-			case 'p': mode_patch   = 1; break;
-			case 'u': mode_upgrade = 1; break;
-			case 'n': mode_new     = 1; break;
-			}
+			if (sw == 'p') mode_patch   = 1;
+			if (sw == 'u') mode_upgrade = 1;
+			if (sw == 'n') mode_new     = 1;
 			strncpy(mbr_path, argv[2], sizeof(mbr_path) - 1);
 			mbr_path[sizeof(mbr_path)-1] = '\0';
 			break;
@@ -2143,6 +2280,8 @@ int main(int argc, char *argv[])
 			"       mbrpatch -h\n");
 		return 1;
 	}
+
+#endif /* __WATCOMC__ */
 
 	/* ******************************************************************
 	 * Mode -r: read first sector from disk, validate, display, save
@@ -2333,7 +2472,7 @@ int main(int argc, char *argv[])
 		case 'm': case 'M':  cmd_metadata(); redraw=1; break;
 		case 'p': case 'P':  print_table();            break;
 		case 'l': case 'L':  cmd_types();              break;
-		case 'w': case 'W':  cmd_write();    redraw=1; break;
+		case 'w': case 'W':  cmd_write();              break;
 		case 'h': case 'H':  cmd_help();               break;
 		default:
 			printf("  Unknown command '%c'. Type 'h' for help.\n",
